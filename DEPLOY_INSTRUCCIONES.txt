@@ -1,0 +1,75 @@
+=====================================================
+   DEPLOY DENTAL WHITE EN LA NUBE — PASO A PASO
+=====================================================
+
+PASO 1 — EJECUTAR EL SQL EN SUPABASE
+--------------------------------------
+1. Ir a supabase.com → tu proyecto "Dental"
+2. Click en "SQL Editor" (ícono de base de datos)
+3. Click en "New query"
+4. Copiar y pegar TODO el contenido del archivo
+   setup_supabase.sql
+5. Click en "Run" (botón verde)
+6. Debe decir "Success"
+
+
+PASO 2 — OBTENER LA SERVICE ROLE KEY
+--------------------------------------
+1. En Supabase → Settings → API
+2. Copiar la clave que dice "service_role" "secret"
+   (empieza con eyJ...)
+3. GUARDARLA, la necesitás en el Paso 4
+
+
+PASO 3 — SUBIR EL CÓDIGO A GITHUB
+--------------------------------------
+1. Ir a github.com → crear cuenta gratuita
+2. Click en "New repository"
+3. Nombre: dental-white
+4. Click "Create repository"
+5. Subir estos archivos:
+   - main.py
+   - requirements.txt
+   - render.yaml
+   - templates/login.html
+   - templates/panel.html
+
+
+PASO 4 — CREAR EL SERVIDOR EN RENDER
+--------------------------------------
+1. Ir a render.com → crear cuenta con tu mail
+2. Click en "New +" → "Web Service"
+3. Conectar con tu cuenta de GitHub
+4. Elegir el repositorio dental-white
+5. Render detecta el render.yaml automáticamente
+6. En "Environment Variables" agregar:
+   - Key:   SUPABASE_KEY
+   - Value: [pegar la service_role key del Paso 2]
+7. Click "Create Web Service"
+8. Esperar 3-5 minutos que termine el deploy
+
+
+PASO 5 — USAR EL SISTEMA
+--------------------------------------
+Render te da una URL como:
+   https://dental-white.onrender.com
+
+Esa URL la abrís desde cualquier navegador,
+en cualquier PC, sin instalar nada.
+
+Compartís esa URL con Micaela y Nennella y listo.
+
+Contraseña: union
+Usuarios: NENNELLA / MICAELA / ADMINISTRADORA
+
+
+IMPORTANTE
+--------------------------------------
+El plan gratuito de Render "duerme" si no hay
+actividad por 15 minutos. La primera vez del día
+tarda 30-60 segundos en cargar. Después va normal.
+
+Si querés que esté siempre despierto son $7 USD/mes
+en el plan "Starter" de Render.
+
+=====================================================
