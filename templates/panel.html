@@ -472,11 +472,25 @@ async function marcarVisto() {
   cargarTabla();
 }
 
-function enviarWA() {
+async function enviarWA() {
   const tel = document.getElementById('e-tel').value.replace(/\D/g,'');
   if (!tel) { alert('Este cliente no tiene número de WhatsApp'); return; }
   const msg = encodeURIComponent(document.getElementById('e-msg').value.trim());
+
+  // Abrir WhatsApp Web con el mensaje
   window.open(`https://web.whatsapp.com/send?phone=549${tel}&text=${msg}`, '_blank');
+
+  // Si hay imagen, abrirla en nueva pestaña para poder guardarla o copiarla
+  if (currId) {
+    const r = await fetch(`/api/cupon/${currId}`);
+    const d = await r.json();
+    if (d.img_path) {
+      setTimeout(() => {
+        window.open(d.img_path, '_blank');
+        alert('💡 La imagen del cupón se abrió en una nueva pestaña.\nGuardala o copiala y pegala en WhatsApp.');
+      }, 1000);
+    }
+  }
 }
 
 // ── SUBIR PDF ─────────────────────────────────────
@@ -491,24 +505,54 @@ async function subirPDF(e) {
   const pf = document.getElementById('prog-fill');
   const pl = document.getElementById('prog-lbl');
   pw.style.display = 'block';
-  pf.style.width = '10%';
-  pl.textContent = 'Enviando PDF...';
+  pf.style.width = '5%';
+  pl.textContent = 'Enviando PDF al servidor...';
 
   const fd = new FormData();
   fd.append('provincia', tabActual);
   fd.append('archivo', file);
 
   try {
-    pf.style.width = '50%';
-    pl.textContent = 'Procesando páginas...';
-    const r = await fetch('/api/subir_pdf', {method:'POST', body:fd});
+    // Iniciar la subida en background
+    const promesa = fetch('/api/subir_pdf', {method:'POST', body:fd});
+
+    // Esperar 2 segundos para que el servidor arranque a procesar
+    await new Promise(r => setTimeout(r, 2000));
+    pf.style.width = '15%';
+    pl.textContent = 'Procesando... (espere)';
+
+    // Polling: consultar progreso cada 2 segundos
+    // Como no tenemos el tarea_id todavía, mostramos animación simple
+    let dots = 0;
+    const intervalo = setInterval(() => {
+      dots = (dots + 1) % 4;
+      const barra = Math.min(15 + dots * 5, 85);
+      pf.style.width = barra + '%';
+      pl.textContent = 'Procesando páginas' + '.'.repeat(dots + 1);
+    }, 2000);
+
+    // Esperar que termine
+    const r = await promesa;
+    clearInterval(intervalo);
+
+    if (!r.ok) {
+      const err = await r.json();
+      pl.textContent = '❌ Error: ' + (err.detail || 'Error desconocido');
+      pf.style.width = '0%';
+      console.error(err.detail);
+      return;
+    }
+
     const d = await r.json();
     pf.style.width = '100%';
     pl.textContent = `✅ ${d.detectados} cupones en ${d.paginas} páginas`;
-    cargarTabla(); cargarBalance();
-    setTimeout(() => { pw.style.display = 'none'; pf.style.width='0%'; }, 4000);
+    cargarTabla();
+    cargarBalance();
+    setTimeout(() => { pw.style.display = 'none'; pf.style.width='0%'; }, 5000);
+
   } catch(err) {
-    pl.textContent = '❌ Error al procesar';
+    pl.textContent = '❌ Error al procesar — revisá los logs en Render';
+    console.error(err);
   }
   e.target.value = '';
 }
