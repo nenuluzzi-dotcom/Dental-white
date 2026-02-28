@@ -394,7 +394,14 @@ async function cargarDetalle(id) {
   // Imagen
   const imgDiv = document.getElementById('img-cupon');
   if (d.img_path) {
-    imgDiv.innerHTML = `<img src="${d.img_path}" alt="cupón" style="width:100%;height:100%;object-fit:contain;cursor:pointer" onclick="window.open('${d.img_path}','_blank')">`;
+    imgDiv.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = d.img_path;
+    img.alt = 'cupón';
+    img.style.cssText = 'width:100%;height:100%;object-fit:contain;cursor:pointer;display:block';
+    img.onclick = () => window.open(d.img_path, '_blank');
+    img.onerror = () => { imgDiv.innerHTML = '<span style="color:red;font-size:11px">Error al cargar imagen</span>'; };
+    imgDiv.appendChild(img);
   } else {
     imgDiv.innerHTML = '<span style="color:#aaa;font-size:12px">Sin imagen</span>';
   }
