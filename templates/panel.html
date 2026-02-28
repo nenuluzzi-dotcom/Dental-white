@@ -3,444 +3,479 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DENTAL WHITE — Panel</title>
+<title>DENTAL WHITE - Panel</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-* { margin:0; padding:0; box-sizing:border-box; font-family: Arial, sans-serif; }
-body { background:#f0f2f5; display:flex; height:100vh; overflow:hidden; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --verde: #27ae60; --verde-light: rgba(39,174,96,0.15);
+  --naranja: #e67e22; --naranja-light: rgba(230,126,34,0.15);
+  --rojo: #e74c3c; --azul: #2980b9;
+  --bg: #0d1117; --panel: #161b22; --card: #1c2128;
+  --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+}
+body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
-/* PANEL IZQUIERDO */
-#pizq {
-  width:280px; min-width:280px; background:#2c3e50;
-  color:white; display:flex; flex-direction:column;
-  padding:16px; gap:10px; overflow-y:auto;
+/* ── TOP BAR ── */
+.topbar {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 10px 20px; display: flex; align-items: center; gap: 16px;
+  flex-shrink: 0; z-index: 100;
 }
-#pizq h2 { font-size:16px; text-align:center; padding:8px 0; }
-#usuario-badge {
-  background:#27ae60; border-radius:8px;
-  padding:8px; text-align:center; font-size:13px; font-weight:bold;
+.topbar-logo { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 2px; color: var(--verde); }
+.topbar-user { font-size: 13px; color: var(--muted); margin-left: auto; }
+.topbar-user span { color: var(--text); font-weight: 600; }
+.btn-logout { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+.btn-logout:hover { border-color: var(--rojo); color: var(--rojo); }
+
+/* ── LAYOUT ── */
+.layout { display: grid; grid-template-columns: 300px 1fr 420px; flex: 1; overflow: hidden; gap: 0; }
+
+/* ── PANEL IZQ ── */
+.panel-izq {
+  background: var(--panel); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
 }
-#tabla-balance { width:100%; border-collapse:collapse; font-size:12px; }
-#tabla-balance th { background:#1a252f; padding:6px 4px; }
-#tabla-balance td { padding:5px 4px; text-align:center; border-bottom:1px solid #3d5166; }
-#lbl-caja {
-  background:#27ae60; border-radius:8px;
-  padding:10px; text-align:center; font-size:14px; font-weight:bold;
+.panel-izq-scroll { flex: 1; overflow-y: auto; padding: 16px; }
+.section-title { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+
+/* Balance table */
+.balance-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
+.balance-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.balance-table td { padding: 5px 6px; border-bottom: 1px solid rgba(48,54,61,0.5); }
+.balance-table tr:last-child td { border-bottom: none; }
+.prov-badge { font-size: 10px; font-weight: 600; letter-spacing: 0.5px; }
+
+.caja-dia {
+  background: var(--verde-light); border: 1px solid rgba(39,174,96,0.3);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; text-align: center;
 }
+.caja-dia .lbl { font-size: 11px; color: var(--verde); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.caja-dia .val { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: var(--verde); }
+
+/* Progress */
+.progress-wrap { margin-bottom: 12px; }
+.progress-bar-bg { background: var(--border); border-radius: 4px; height: 6px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--verde); border-radius: 4px; transition: width 0.3s; width: 0%; }
+.progress-lbl { font-size: 11px; color: var(--muted); margin-top: 4px; text-align: center; }
+
+/* Buttons */
 .btn-panel {
-  padding:10px; border:none; border-radius:8px;
-  font-size:13px; font-weight:bold; cursor:pointer;
-  width:100%; transition: opacity .2s;
+  width: 100%; border: none; border-radius: 8px; padding: 10px 14px;
+  font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+  transition: opacity 0.2s, transform 0.1s;
 }
-.btn-panel:hover { opacity:.85; }
-.leyenda { font-size:11px; text-align:center; color:#aaa; padding:4px 0; }
+.btn-panel:hover { opacity: 0.85; transform: translateY(-1px); }
+.btn-verde  { background: var(--verde); color: white; }
+.btn-azul   { background: var(--azul); color: white; }
+.btn-gris   { background: #34495e; color: white; }
+.btn-naranja{ background: var(--naranja); color: white; }
+.btn-rojo   { background: var(--rojo); color: white; }
+.btn-oscuro { background: #2c3e50; color: white; }
 
-/* BARRA DE PROGRESO */
-#prog-wrap { display:none; }
-#prog-bar {
-  width:100%; height:8px; background:#1a252f;
-  border-radius:4px; overflow:hidden; margin-top:4px;
-}
-#prog-fill { height:100%; background:#27ae60; width:0%; transition:width .3s; }
-#prog-lbl { font-size:11px; color:#aaa; text-align:center; margin-top:3px; }
+.leyenda { font-size: 11px; color: var(--muted); text-align: center; padding: 8px 0; border-top: 1px solid var(--border); }
+.dot-verde  { display: inline-block; width: 8px; height: 8px; background: #4caf50; border-radius: 50%; }
+.dot-naranja{ display: inline-block; width: 8px; height: 8px; background: var(--naranja); border-radius: 50%; }
 
-/* PANEL CENTRAL */
-#pcen {
-  flex:1; display:flex; flex-direction:column; overflow:hidden;
-}
-#tabs {
-  display:flex; background:#34495e; overflow-x:auto;
-  border-bottom:3px solid #27ae60;
-}
-.tab {
-  padding:12px 20px; cursor:pointer; color:#aaa;
-  font-size:13px; font-weight:bold; white-space:nowrap;
-  transition: all .2s; border-bottom:3px solid transparent;
-  margin-bottom:-3px;
-}
-.tab.activo { color:white; border-bottom-color:#27ae60; background:#2c3e50; }
-#buscar-wrap {
-  padding:10px 16px; background:white;
-  border-bottom:1px solid #ddd;
-}
-#buscar {
-  width:100%; padding:8px 12px; border:2px solid #ddd;
-  border-radius:8px; font-size:14px; outline:none;
-}
-#buscar:focus { border-color:#3498db; }
-#tabla-wrap { flex:1; overflow-y:auto; }
-table { width:100%; border-collapse:collapse; font-size:13px; }
-thead th {
-  background:#2c3e50; color:white; padding:10px 8px;
-  position:sticky; top:0; cursor:pointer; user-select:none;
-}
-thead th:hover { background:#3d5166; }
-tbody tr { border-bottom:1px solid #eee; cursor:pointer; transition:background .1s; }
-tbody tr:hover { background:#f8f9fa !important; }
-tbody tr.sel { background:#d5e8ff !important; }
-.verde   { background:#c8f0c8 !important; }
-.naranja { background:#ffd9a0 !important; }
+/* ── PANEL CENTRAL ── */
+.panel-cen { display: flex; flex-direction: column; overflow: hidden; }
 
-/* PANEL DERECHO */
-#pder {
-  width:380px; min-width:380px; background:white;
-  display:flex; flex-direction:column; overflow-y:auto;
-  border-left:2px solid #ddd; padding:16px; gap:10px;
+.tabs-nav {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; overflow-x: auto; flex-shrink: 0;
+  scrollbar-width: none;
 }
-#img-cupon {
-  width:100%; height:200px; background:#ecf0f1;
-  border-radius:8px; object-fit:contain;
-  display:flex; align-items:center; justify-content:center;
-  color:#aaa; font-size:13px; overflow:hidden;
+.tabs-nav::-webkit-scrollbar { display: none; }
+.tab-btn {
+  flex-shrink: 0; padding: 12px 18px; font-size: 13px; font-weight: 500;
+  color: var(--muted); background: transparent; border: none; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap;
 }
-#img-cupon img { width:100%; height:100%; object-fit:contain; }
-.campo-lbl { font-size:11px; font-weight:bold; color:#555; margin-bottom:2px; }
-.campo-inp {
-  width:100%; padding:8px 10px; border:2px solid #e0e0e0;
-  border-radius:6px; font-size:13px; outline:none;
-}
-.campo-inp:focus { border-color:#3498db; }
-select.campo-inp { cursor:pointer; }
-.switch-row {
-  display:flex; align-items:center; gap:10px;
-  padding:6px 0;
-}
-.switch {
-  position:relative; width:48px; height:24px;
-}
-.switch input { opacity:0; width:0; height:0; }
-.slider {
-  position:absolute; cursor:pointer;
-  top:0; left:0; right:0; bottom:0;
-  background:#e74c3c; border-radius:24px;
-  transition:.3s;
-}
-.slider:before {
-  content:""; position:absolute;
-  height:18px; width:18px; left:3px; bottom:3px;
-  background:white; border-radius:50%; transition:.3s;
-}
-input:checked + .slider { background:#27ae60; }
-input:checked + .slider:before { transform:translateX(24px); }
-#lbl-estado { font-size:13px; font-weight:bold; }
-textarea.campo-inp { resize:vertical; min-height:60px; }
-.btn-acc {
-  width:100%; padding:10px; border:none; border-radius:8px;
-  font-size:13px; font-weight:bold; cursor:pointer;
-  transition: opacity .2s;
-}
-.btn-acc:hover { opacity:.85; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--verde); border-bottom-color: var(--verde); }
 
-/* MODAL BALANCE */
-#modal-overlay {
-  display:none; position:fixed; inset:0;
-  background:rgba(0,0,0,.5); z-index:1000;
-  align-items:center; justify-content:center;
+.tab-content { flex: 1; overflow: hidden; display: none; flex-direction: column; }
+.tab-content.active { display: flex; }
+
+.search-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.search-input {
+  width: 100%; background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-family: 'DM Sans', sans-serif;
+  font-size: 13px; padding: 8px 14px; outline: none; transition: border-color 0.2s;
 }
-#modal-overlay.show { display:flex; }
-#modal {
-  background:white; border-radius:12px;
-  padding:30px; max-width:600px; width:90%;
-  max-height:85vh; overflow-y:auto;
+.search-input:focus { border-color: var(--verde); }
+
+/* Table */
+.table-wrap { flex: 1; overflow-y: auto; }
+table.cupones { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.cupones th {
+  background: var(--card); color: var(--muted); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 1px; padding: 10px 12px;
+  position: sticky; top: 0; z-index: 10; cursor: pointer; user-select: none;
 }
-#modal h2 { font-size:18px; margin-bottom:16px; color:#2c3e50; }
-#modal pre {
-  background:#f8f9fa; border-radius:8px;
-  padding:16px; font-size:12px; white-space:pre-wrap;
-  font-family: monospace; border:1px solid #ddd;
+table.cupones th:hover { color: var(--text); }
+table.cupones td { padding: 9px 12px; border-bottom: 1px solid rgba(48,54,61,0.4); }
+table.cupones tr { cursor: pointer; transition: background 0.15s; }
+table.cupones tr:hover td { background: rgba(255,255,255,0.03); }
+table.cupones tr.selected td { background: rgba(39,174,96,0.1); }
+.row-verde td { background: rgba(39,174,96,0.08) !important; }
+.row-naranja td { background: rgba(230,126,34,0.08) !important; }
+.row-verde.selected td, .row-naranja.selected td { filter: brightness(1.2); }
+
+.badge-pagado { background: var(--verde-light); color: var(--verde); font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; letter-spacing: 0.5px; }
+.badge-pend   { background: rgba(231,76,60,0.1); color: var(--rojo); font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; letter-spacing: 0.5px; }
+
+/* ── PANEL DER ── */
+.panel-der {
+  background: var(--panel); border-left: 1px solid var(--border);
+  overflow-y: auto; display: flex; flex-direction: column;
 }
-.modal-btns { display:flex; gap:10px; margin-top:16px; }
-.modal-btns button {
-  flex:1; padding:12px; border:none; border-radius:8px;
-  font-size:14px; font-weight:bold; cursor:pointer;
+.visor-img {
+  background: var(--card); height: 220px; display: flex; align-items: center;
+  justify-content: center; color: var(--muted); font-size: 13px;
+  flex-shrink: 0; position: relative; overflow: hidden;
 }
+.visor-img img { width: 100%; height: 100%; object-fit: contain; }
+.panel-der-body { padding: 16px; flex: 1; }
+
+.field-group { margin-bottom: 12px; }
+.field-group label { display: block; font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+.field-group input, .field-group select, .field-group textarea {
+  width: 100%; background: var(--card); border: 1px solid var(--border);
+  border-radius: 7px; color: var(--text); font-family: 'DM Sans', sans-serif;
+  font-size: 13px; padding: 8px 12px; outline: none; transition: border-color 0.2s;
+  appearance: none;
+}
+.field-group input:focus, .field-group select:focus, .field-group textarea:focus { border-color: var(--verde); }
+.field-group textarea { resize: vertical; min-height: 60px; }
+
+.switch-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 12px; background: var(--card); border-radius: 8px; border: 1px solid var(--border); }
+.switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; inset: 0; background: #444; border-radius: 24px; cursor: pointer; transition: background 0.2s; }
+.slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: transform 0.2s; }
+input:checked + .slider { background: var(--verde); }
+input:checked + .slider::before { transform: translateX(20px); }
+.switch-lbl { font-size: 13px; font-weight: 600; }
+.switch-lbl.pagado { color: var(--verde); }
+.switch-lbl.pendiente { color: var(--rojo); }
+
+.btn-accion {
+  width: 100%; border: none; border-radius: 8px; padding: 10px;
+  font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; margin-bottom: 6px; transition: opacity 0.2s;
+}
+.btn-accion:hover { opacity: 0.85; }
+.btn-registrar { background: var(--verde); color: white; padding: 13px; font-size: 14px; }
+.btn-visto    { background: var(--naranja); color: white; }
+.btn-guardar  { background: #34495e; color: white; }
+.btn-whatsapp { background: #25d366; color: white; }
+
+/* ── MODAL ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 1000; display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 28px; max-width: 580px; width: 90%; max-height: 80vh; overflow-y: auto;
+}
+.modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+.modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+.modal-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.modal-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.modal-table td { padding: 8px 10px; border-bottom: 1px solid rgba(48,54,61,0.4); }
+.modal-footer { margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end; }
+.btn-modal { padding: 10px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn-modal-cancel { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+.btn-modal-ok { background: var(--verde); color: white; }
+.btn-modal-rojo { background: var(--rojo); color: white; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+.empty-state { text-align: center; padding: 40px; color: var(--muted); font-size: 14px; }
+.spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-
-<!-- PANEL IZQUIERDO -->
-<div id="pizq">
-  <h2>🦷 DENTAL WHITE</h2>
-  <div id="usuario-badge">CARGANDO...</div>
-
-  <table id="tabla-balance">
-    <thead><tr><th>PROV</th><th>CANT</th><th>INICIAL</th><th>COBRADO</th></tr></thead>
-    <tbody id="bal-body"></tbody>
-  </table>
-
-  <div id="lbl-caja">CAJA DEL DÍA: $0</div>
-
-  <div id="prog-wrap">
-    <div id="prog-bar"><div id="prog-fill"></div></div>
-    <div id="prog-lbl">Procesando...</div>
-  </div>
-
-  <!-- Botones -->
-  <label style="display:none" id="pdf-label">
-    <input type="file" id="pdf-input" accept=".pdf" style="display:none">
-    <div class="btn-panel" style="background:#27ae60">📥 SUBIR PDF</div>
-  </label>
-  <button class="btn-panel" style="background:#27ae60" onclick="document.getElementById('pdf-input').click()">📥 SUBIR PDF</button>
-  <input type="file" id="pdf-input" accept=".pdf" style="display:none">
-
-  <button class="btn-panel" style="background:#2980b9" onclick="agregarManual()">➕ AGREGAR</button>
-  <button class="btn-panel" style="background:#34495e" onclick="mostrarIniciarMes()">📅 INICIAR MES</button>
-  <button class="btn-panel" style="background:#7f8c8d" onclick="mostrarCierre()">📝 CIERRE</button>
-  <button class="btn-panel" style="background:#c0392b" onclick="eliminarCliente()">❌ ELIMINAR</button>
-  <button class="btn-panel" style="background:#e67e22" onclick="mostrarBalanceDiario()">📊 BALANCE DIARIO</button>
-
-  <div class="leyenda">🟢 Guardado/Pagado &nbsp; 🟠 Cuota vieja</div>
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-logo">🦷 DENTAL WHITE</div>
+  <div class="topbar-user">Sesión: <span id="lbl-usuario">-</span></div>
+  <button class="btn-logout" onclick="logout()">Salir</button>
 </div>
 
-<!-- PANEL CENTRAL -->
-<div id="pcen">
-  <div id="tabs"></div>
-  <div id="buscar-wrap">
-    <input id="buscar" placeholder="🔍 Buscar cliente..." oninput="cargarTabla()">
-  </div>
-  <div id="tabla-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th onclick="ordenarPorN()">N° ↕</th>
-          <th>AFILIADO</th>
-          <th>MONTO</th>
-          <th>CTA</th>
-          <th>FECHA</th>
-          <th>VISTO</th>
-        </tr>
-      </thead>
-      <tbody id="tabla-body"></tbody>
+<div class="layout">
+<!-- ── PANEL IZQ ── -->
+<div class="panel-izq">
+  <div class="panel-izq-scroll">
+    <div class="section-title">📊 Balances</div>
+    <table class="balance-table" id="tabla-balance">
+      <thead><tr><th>Prov</th><th>Clientes</th><th>Inicial</th><th>Cobrado</th></tr></thead>
+      <tbody></tbody>
     </table>
+
+    <div class="caja-dia">
+      <div class="lbl">CAJA DEL DÍA</div>
+      <div class="val" id="lbl-caja">$0</div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+      <div class="progress-lbl" id="progress-lbl"></div>
+    </div>
+
+    <button class="btn-panel btn-verde" onclick="clickSubirPDF()">📥 SUBIR PDF</button>
+    <input type="file" id="input-pdf" accept=".pdf" style="display:none" onchange="subirPDF(event)">
+    <button class="btn-panel btn-azul" onclick="agregarManual()">➕ AGREGAR MANUAL</button>
+    <button class="btn-panel btn-oscuro" onclick="mostrarIniciarMes()">📅 INICIAR MES</button>
+    <button class="btn-panel btn-gris" onclick="mostrarCierre()">📝 CIERRE</button>
+    <button class="btn-panel btn-rojo" onclick="eliminarCupon()">❌ ELIMINAR</button>
+    <button class="btn-panel btn-naranja" onclick="mostrarBalanceDiario()">📊 BALANCE DIARIO</button>
+  </div>
+  <div class="leyenda">
+    <span class="dot-verde"></span> Guardado/Listo &nbsp;
+    <span class="dot-naranja"></span> Cuota vieja
   </div>
 </div>
 
-<!-- PANEL DERECHO -->
-<div id="pder">
-  <div id="img-cupon"><span>Sin imagen</span></div>
-
-  <div><div class="campo-lbl">N° AFILIADO</div>
-  <input class="campo-inp" id="e-cta"></div>
-
-  <div><div class="campo-lbl">AFILIADO</div>
-  <input class="campo-inp" id="e-nom"></div>
-
-  <div><div class="campo-lbl">MONTO $</div>
-  <input class="campo-inp" id="e-mon" type="number"></div>
-
-  <div><div class="campo-lbl">CTA (CUOTA)</div>
-  <input class="campo-inp" id="e-cuo"></div>
-
-  <div><div class="campo-lbl">FECHA COBRO</div>
-  <input class="campo-inp" id="e-fec"></div>
-
-  <div><div class="campo-lbl">WHATSAPP</div>
-  <input class="campo-inp" id="e-tel" type="tel"></div>
-
-  <div><div class="campo-lbl">MÉTODO DE PAGO</div>
-  <select class="campo-inp" id="e-pag">
-    <option>EFECTIVO</option>
-    <option>TRANSFERENCIA</option>
-    <option>MERCADO PAGO</option>
-    <option>TARJETA</option>
-  </select></div>
-
-  <div class="switch-row">
-    <label class="switch">
-      <input type="checkbox" id="sw-estado" onchange="toggleEstado()">
-      <span class="slider"></span>
-    </label>
-    <span id="lbl-estado" style="color:#e74c3c">PENDIENTE</span>
-  </div>
-
-  <div><div class="campo-lbl">COMENTARIO</div>
-  <input class="campo-inp" id="e-com"></div>
-
-  <div><div class="campo-lbl">MENSAJE WHATSAPP</div>
-  <textarea class="campo-inp" id="e-msg">Hola! Le informamos que su cupón de pago Dental White está disponible. Ante cualquier consulta no dude en contactarnos.</textarea></div>
-
-  <button class="btn-acc" style="background:#27ae60;color:white;font-size:15px;padding:14px"
-          onclick="registrarPago()">✅ REGISTRAR PAGO</button>
-  <button class="btn-acc" style="background:#f39c12;color:white" onclick="marcarVisto()">👁️ VISTO</button>
-  <button class="btn-acc" style="background:#34495e;color:white" onclick="guardarDatos()">💾 GUARDAR CAMBIOS</button>
-  <button class="btn-acc" style="background:#2ecc71;color:white" onclick="enviarWA()">🟢 ENVIAR WHATSAPP</button>
+<!-- ── PANEL CENTRAL ── -->
+<div class="panel-cen">
+  <div class="tabs-nav" id="tabs-nav"></div>
+  <div id="tabs-body" style="flex:1;overflow:hidden;display:flex;flex-direction:column;"></div>
 </div>
 
-<!-- MODAL -->
-<div id="modal-overlay">
-  <div id="modal">
-    <h2 id="modal-titulo"></h2>
-    <pre id="modal-texto"></pre>
-    <div class="modal-btns" id="modal-btns"></div>
+<!-- ── PANEL DER ── -->
+<div class="panel-der">
+  <div class="visor-img" id="visor-img">
+    <span>Sin imagen</span>
+  </div>
+  <div class="panel-der-body">
+    <div class="field-group"><label>N° AFILIADO</label><input id="e-cta" type="text"></div>
+    <div class="field-group"><label>AFILIADO</label><input id="e-nom" type="text"></div>
+    <div class="field-group"><label>MONTO $</label><input id="e-mon" type="number"></div>
+    <div class="field-group"><label>CTA (CUOTA)</label><input id="e-cuo" type="text"></div>
+    <div class="field-group"><label>FECHA COBRO</label><input id="e-fec" type="text"></div>
+    <div class="field-group"><label>WHATSAPP</label><input id="e-tel" type="text"></div>
+    <div class="field-group">
+      <label>MÉTODO DE PAGO</label>
+      <select id="e-pag">
+        <option>EFECTIVO</option><option>TRANSFERENCIA</option>
+        <option>MERCADO PAGO</option><option>TARJETA</option>
+      </select>
+    </div>
+
+    <div class="switch-row">
+      <label class="switch">
+        <input type="checkbox" id="sw-estado" onchange="toggleEstado()">
+        <span class="slider"></span>
+      </label>
+      <span class="switch-lbl pendiente" id="lbl-estado">PENDIENTE</span>
+    </div>
+
+    <div class="field-group"><label>COMENTARIO</label><input id="e-com" type="text"></div>
+    <div class="field-group">
+      <label>MENSAJE WHATSAPP</label>
+      <textarea id="e-msg">Hola! Le informamos que su cupón de pago Dental White está disponible. Ante cualquier consulta no dude en contactarnos.</textarea>
+    </div>
+
+    <button class="btn-accion btn-registrar" onclick="registrarPago()">✅ REGISTRAR PAGO</button>
+    <button class="btn-accion btn-visto" onclick="marcarVisto()">👁️ VISTO</button>
+    <button class="btn-accion btn-guardar" onclick="guardarCambios()">💾 GUARDAR CAMBIOS</button>
+    <button class="btn-accion btn-whatsapp" onclick="enviarWA()">🟢 ENVIAR WHATSAPP</button>
+  </div>
+</div>
+</div>
+
+<!-- MODALES -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-body">
+    <button class="modal-close" onclick="cerrarModal()">✕</button>
+    <div id="modal-content"></div>
   </div>
 </div>
 
 <script>
-// ── ESTADO GLOBAL ───────────────────────────────
-let usuario = '', provincias = [], tabActual = '', currId = null;
-let ordenN = true, filas = [];
+let usuario = '', provincias = [], tabActual = '', cupones = {}, currId = null;
 
-// ── INIT ─────────────────────────────────────────
+// ── INIT ──
 window.onload = () => {
   usuario   = sessionStorage.getItem('usuario');
   provincias = JSON.parse(sessionStorage.getItem('provincias') || '[]');
-  if (!usuario) { window.location = '/'; return; }
-
-  document.getElementById('usuario-badge').textContent = '👤 ' + usuario;
-
-  // Crear tabs
-  const tabs = document.getElementById('tabs');
-  ['✅ PAGOS HOY', ...provincias].forEach(p => {
-    const t = document.createElement('div');
-    t.className = 'tab';
-    t.textContent = p;
-    t.onclick = () => cambiarTab(p);
-    tabs.appendChild(t);
-  });
-
-  // PDF input
-  document.getElementById('pdf-input').onchange = subirPDF;
-
-  cambiarTab('✅ PAGOS HOY');
+  if (!usuario) { window.location.href = '/'; return; }
+  document.getElementById('lbl-usuario').textContent = usuario;
+  crearTabs();
   cargarBalance();
 };
 
-// ── TABS ──────────────────────────────────────────
-function cambiarTab(prov) {
-  tabActual = prov;
-  document.querySelectorAll('.tab').forEach(t => {
-    t.classList.toggle('activo', t.textContent === prov);
+function logout() { sessionStorage.clear(); window.location.href = '/'; }
+
+// ── TABS ──
+function crearTabs() {
+  const nav  = document.getElementById('tabs-nav');
+  const body = document.getElementById('tabs-body');
+  const allTabs = ['✅ PAGOS HOY', ...provincias];
+  allTabs.forEach((p, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = p; btn.dataset.tab = p;
+    btn.onclick = () => activarTab(p);
+    nav.appendChild(btn);
+
+    const div = document.createElement('div');
+    div.className = 'tab-content' + (i === 0 ? ' active' : '');
+    div.id = `tab-${p}`;
+    div.innerHTML = `
+      <div class="search-bar">
+        <input class="search-input" placeholder="Buscar afiliado..." oninput="buscarEn('${p}', this.value)">
+      </div>
+      <div class="table-wrap">
+        <table class="cupones">
+          <thead><tr>
+            <th onclick="ordenarPor('${p}','id')">ID</th>
+            <th onclick="ordenarPor('${p}','cuenta')">N°</th>
+            <th onclick="ordenarPor('${p}','nombre')">AFILIADO</th>
+            <th onclick="ordenarPor('${p}','monto')">MONTO</th>
+            <th onclick="ordenarPor('${p}','cta')">CTA</th>
+            <th onclick="ordenarPor('${p}','fecha_cobro')">FECHA</th>
+            <th>ESTADO</th>
+          </tr></thead>
+          <tbody id="tbody-${p}"></tbody>
+        </table>
+      </div>`;
+    body.appendChild(div);
   });
-  document.getElementById('buscar').value = '';
-  cargarTabla();
+  tabActual = '✅ PAGOS HOY';
+  cargarTab(tabActual);
 }
 
-// ── TABLA ─────────────────────────────────────────
-async function cargarTabla() {
-  const buscar = document.getElementById('buscar').value;
-  let url, data;
+function activarTab(p) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === p));
+  document.querySelectorAll('.tab-content').forEach(d => d.classList.toggle('active', d.id === `tab-${p}`));
+  tabActual = p;
+  cargarTab(p);
+}
 
-  if (tabActual === '✅ PAGOS HOY') {
-    const r = await fetch('/api/cupones/hoy');
-    data = await r.json();
-    // Filtrar por búsqueda
-    if (buscar) data = data.filter(d =>
-      (d.nombre||'').toLowerCase().includes(buscar.toLowerCase()));
-    // Color: siempre verde en pagos hoy
-    data.forEach(d => d.color = 'verde');
-  } else {
-    const r = await fetch(`/api/cupones?provincia=${encodeURIComponent(tabActual)}&buscar=${encodeURIComponent(buscar)}`);
-    data = await r.json();
+async function cargarTab(p, buscar = '') {
+  const url = p === '✅ PAGOS HOY' ? '/api/cupones/hoy' : `/api/cupones?provincia=${encodeURIComponent(p)}&buscar=${encodeURIComponent(buscar)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  cupones[p] = data;
+  renderTabla(p, data);
+  cargarBalance();
+}
+
+function renderTabla(p, data) {
+  const tbody = document.getElementById(`tbody-${p}`);
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Sin registros</td></tr>`;
+    return;
   }
-
-  filas = data;
-  renderTabla(data);
-}
-
-function renderTabla(data) {
-  const body = document.getElementById('tabla-body');
-  body.innerHTML = '';
   data.forEach(r => {
     const tr = document.createElement('tr');
-    if (r.color === 'verde')   tr.classList.add('verde');
-    if (r.color === 'naranja') tr.classList.add('naranja');
-    if (currId === r.id)       tr.classList.add('sel');
+    tr.className = r.color === 'verde' ? 'row-verde' : r.color === 'naranja' ? 'row-naranja' : '';
+    if (r.id === currId) tr.classList.add('selected');
+    tr.onclick = () => cargarDetalle(r.id, p);
+    const badge = r.estado === 'PAGADO'
+      ? `<span class="badge-pagado">PAGADO</span>`
+      : `<span class="badge-pend">PENDIENTE</span>`;
     tr.innerHTML = `
-      <td>${r.id}</td>
-      <td>${r.cuenta||''}</td>
-      <td style="text-align:left;padding-left:8px">${r.nombre||''}</td>
-      <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
-      <td>${r.cta||''}</td>
-      <td>${r.fecha_cobro||''}</td>
-      <td style="text-align:center;font-size:16px">${r.visto ? '✅' : '🟡'}</td>
-    `;
-    tr.onclick = () => cargarDetalle(r.id);
-    body.appendChild(tr);
+      <td>${r.id}</td><td>${r.cuenta || ''}</td>
+      <td>${r.nombre || ''}</td><td>$${(r.monto||0).toLocaleString('es-AR')}</td>
+      <td>${r.cta || ''}</td><td>${r.fecha_cobro || ''}</td>
+      <td>${badge}</td>`;
+    tbody.appendChild(tr);
   });
 }
 
-// ── ORDENAR POR N° ───────────────────────────────
-function ordenarPorN() {
-  filas.sort((a,b) => {
-    const na = parseInt(a.cuenta)||99999;
-    const nb = parseInt(b.cuenta)||99999;
-    return ordenN ? na-nb : nb-na;
+function buscarEn(p, val) { cargarTab(p, val); }
+
+function ordenarPor(p, campo) {
+  if (!cupones[p]) return;
+  const asc = !cupones[p]._orden || cupones[p]._orden !== campo;
+  cupones[p].sort((a, b) => {
+    let va = a[campo] ?? '', vb = b[campo] ?? '';
+    if (!isNaN(va) && !isNaN(vb)) { va = Number(va); vb = Number(vb); }
+    return asc ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
   });
-  ordenN = !ordenN;
-  renderTabla(filas);
+  cupones[p]._orden = asc ? campo : null;
+  renderTabla(p, cupones[p]);
 }
 
-// ── DETALLE ───────────────────────────────────────
-async function cargarDetalle(id) {
+// ── DETALLE ──
+async function cargarDetalle(id, prov) {
   currId = id;
-  const r = await fetch(`/api/cupon/${id}`);
-  const d = await r.json();
+  // Highlight
+  document.querySelectorAll('table.cupones tr').forEach(tr => tr.classList.remove('selected'));
+  document.querySelectorAll('table.cupones tr').forEach(tr => {
+    if (tr.cells[0] && parseInt(tr.cells[0].textContent) === id) tr.classList.add('selected');
+  });
 
-  document.getElementById('e-cta').value = d.cuenta || '';
-  document.getElementById('e-nom').value = d.nombre || '';
-  document.getElementById('e-mon').value = d.monto  || '';
-  document.getElementById('e-cuo').value = d.cta    || '';
-  document.getElementById('e-fec').value = d.fecha_cobro || '';
-  document.getElementById('e-tel').value = d.telefono || '';
-  document.getElementById('e-com').value = d.comentario || '';
-  if (d.medio_pago) document.getElementById('e-pag').value = d.medio_pago;
+  const res = await fetch(`/api/cupon/${id}`);
+  const r = await res.json();
 
-  // Switch estado
-  const pagado = d.estado === 'PAGADO';
+  document.getElementById('e-cta').value = r.cuenta || '';
+  document.getElementById('e-nom').value = r.nombre || '';
+  document.getElementById('e-mon').value = r.monto || '';
+  document.getElementById('e-cuo').value = r.cta || '';
+  document.getElementById('e-fec').value = r.fecha_cobro || '';
+  document.getElementById('e-tel').value = r.telefono || '';
+  document.getElementById('e-com').value = r.comentario || '';
+  document.getElementById('e-pag').value = r.medio_pago || 'EFECTIVO';
+
+  const pagado = r.estado === 'PAGADO';
   document.getElementById('sw-estado').checked = pagado;
-  document.getElementById('lbl-estado').textContent = pagado ? 'PAGADO' : 'PENDIENTE';
-  document.getElementById('lbl-estado').style.color  = pagado ? '#27ae60' : '#e74c3c';
+  const lbl = document.getElementById('lbl-estado');
+  lbl.textContent = pagado ? 'PAGADO' : 'PENDIENTE';
+  lbl.className = 'switch-lbl ' + (pagado ? 'pagado' : 'pendiente');
 
   // Imagen
-  const imgDiv = document.getElementById('img-cupon');
-  if (d.img_path) {
-    imgDiv.innerHTML = '';
-    const img = document.createElement('img');
-    img.src = d.img_path;
-    img.alt = 'cupón';
-    img.style.cssText = 'width:100%;height:100%;object-fit:contain;cursor:pointer;display:block';
-    img.onclick = () => window.open(d.img_path, '_blank');
-    img.onerror = () => { imgDiv.innerHTML = '<span style="color:red;font-size:11px">Error al cargar imagen</span>'; };
-    imgDiv.appendChild(img);
-  } else {
-    imgDiv.innerHTML = '<span style="color:#aaa;font-size:12px">Sin imagen</span>';
-  }
-
-  // Resaltar fila
-  document.querySelectorAll('#tabla-body tr').forEach(tr => tr.classList.remove('sel'));
-  const trs = document.querySelectorAll('#tabla-body tr');
-  trs.forEach(tr => { if (parseInt(tr.cells[0].textContent) === id) tr.classList.add('sel'); });
+  const visor = document.getElementById('visor-img');
+  try {
+    const ir = await fetch(`/api/cupon/${id}/imagen`);
+    if (ir.ok) {
+      const idata = await ir.json();
+      visor.innerHTML = `<img src="${idata.url}" alt="Cupón">`;
+    } else {
+      visor.innerHTML = '<span>Sin imagen</span>';
+    }
+  } catch { visor.innerHTML = '<span>Sin imagen</span>'; }
 }
 
-// ── ACCIONES ─────────────────────────────────────
+// ── SWITCH ESTADO ──
+function toggleEstado() {
+  const pagado = document.getElementById('sw-estado').checked;
+  const lbl = document.getElementById('lbl-estado');
+  lbl.textContent = pagado ? 'PAGADO' : 'PENDIENTE';
+  lbl.className = 'switch-lbl ' + (pagado ? 'pagado' : 'pendiente');
+}
+
+// ── ACCIONES PANEL DER ──
 async function registrarPago() {
-  if (!currId) return;
+  if (!currId) return alert('Seleccioná un cupón');
   const fd = new FormData();
   fd.append('medio_pago', document.getElementById('e-pag').value);
   fd.append('comentario', document.getElementById('e-com').value);
-  await fetch(`/api/cupon/${currId}/pago`, {method:'POST', body:fd});
-  cargarTabla(); cargarBalance();
+  await fetch(`/api/cupon/${currId}/pago`, { method: 'POST', body: fd });
+  cargarTab(tabActual);
 }
 
-async function toggleEstado() {
+async function marcarVisto() {
   if (!currId) return;
-  const pagado = document.getElementById('sw-estado').checked;
-  document.getElementById('lbl-estado').textContent = pagado ? 'PAGADO' : 'PENDIENTE';
-  document.getElementById('lbl-estado').style.color  = pagado ? '#27ae60' : '#e74c3c';
-
-  if (pagado) {
-    const fd = new FormData();
-    fd.append('medio_pago', document.getElementById('e-pag').value);
-    fd.append('comentario', document.getElementById('e-com').value);
-    await fetch(`/api/cupon/${currId}/pago`, {method:'POST', body:fd});
-  } else {
-    await fetch(`/api/cupon/${currId}/impago`, {method:'POST'});
-  }
-  cargarTabla(); cargarBalance();
+  await fetch(`/api/cupon/${currId}/visto`, { method: 'POST' });
 }
 
-async function guardarDatos() {
-  if (!currId) return;
+async function guardarCambios() {
+  if (!currId) return alert('Seleccioná un cupón');
   const fd = new FormData();
   fd.append('cuenta',      document.getElementById('e-cta').value);
   fd.append('nombre',      document.getElementById('e-nom').value);
@@ -449,268 +484,203 @@ async function guardarDatos() {
   fd.append('fecha_cobro', document.getElementById('e-fec').value);
   fd.append('telefono',    document.getElementById('e-tel').value);
   fd.append('comentario',  document.getElementById('e-com').value);
-  await fetch(`/api/cupon/${currId}/guardar`, {method:'POST', body:fd});
-  cargarTabla(); cargarBalance();
-  alert('✅ Guardado');
+  await fetch(`/api/cupon/${currId}/guardar`, { method: 'POST', body: fd });
+  cargarTab(tabActual);
 }
 
-async function eliminarCliente() {
-  if (!currId) return;
-  if (!confirm('¿Eliminar este cliente?')) return;
-  await fetch(`/api/cupon/${currId}`, {method:'DELETE'});
-  currId = null;
-  cargarTabla(); cargarBalance();
+function enviarWA() {
+  const tel = document.getElementById('e-tel').value.replace(/\D/g, '');
+  const msg = encodeURIComponent(document.getElementById('e-msg').value);
+  if (!tel) return alert('Sin número de WhatsApp');
+  window.open(`https://wa.me/${tel}?text=${msg}`, '_blank');
 }
 
-async function agregarManual() {
-  if (!tabActual || tabActual === '✅ PAGOS HOY') {
-    alert('Seleccioná una provincia primero');
-    return;
-  }
-  const fd = new FormData();
-  fd.append('provincia', tabActual);
-  await fetch('/api/cupon/agregar', {method:'POST', body:fd});
-  cargarTabla();
+// ── BALANCE ──
+async function cargarBalance() {
+  const provs = provincias.join(',');
+  if (!provs) return;
+  const res = await fetch(`/api/balance?provincias=${encodeURIComponent(provs)}`);
+  const data = await res.json();
+  const tbody = document.querySelector('#tabla-balance tbody');
+  tbody.innerHTML = '';
+  let totalCobrado = 0;
+  data.forEach(d => {
+    totalCobrado += d.cobrado;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="prov-badge">${d.provincia.substring(0,6)}</span></td>
+      <td>${d.cant}</td>
+      <td>$${(d.inicial||0).toLocaleString('es-AR')}</td>
+      <td>$${(d.cobrado||0).toLocaleString('es-AR')}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('lbl-caja').textContent = '$' + totalCobrado.toLocaleString('es-AR');
 }
 
-async function marcarVisto() {
-  if (!currId) return;
-  await fetch(`/api/cupon/${currId}/visto`, {method:'POST'});
-  cargarTabla();
+// ── SUBIR PDF ──
+function clickSubirPDF() {
+  if (tabActual === '✅ PAGOS HOY') return alert('Seleccioná una provincia primero');
+  document.getElementById('input-pdf').click();
 }
 
-async function enviarWA() {
-  const tel = document.getElementById('e-tel').value.replace(/\D/g,'');
-  if (!tel) { alert('Este cliente no tiene número de WhatsApp'); return; }
-  const msg = encodeURIComponent(document.getElementById('e-msg').value.trim());
-
-  // Abrir WhatsApp Web con el mensaje
-  window.open(`https://web.whatsapp.com/send?phone=549${tel}&text=${msg}`, '_blank');
-
-  // Si hay imagen, abrirla en nueva pestaña para poder guardarla o copiarla
-  if (currId) {
-    const r = await fetch(`/api/cupon/${currId}`);
-    const d = await r.json();
-    if (d.img_path) {
-      setTimeout(() => {
-        window.open(d.img_path, '_blank');
-        alert('💡 La imagen del cupón se abrió en una nueva pestaña.\nGuardala o copiala y pegala en WhatsApp.');
-      }, 1000);
-    }
-  }
-}
-
-// ── SUBIR PDF ─────────────────────────────────────
-async function subirPDF(e) {
-  const file = e.target.files[0];
+async function subirPDF(event) {
+  const file = event.target.files[0];
   if (!file) return;
-  if (!tabActual || tabActual === '✅ PAGOS HOY') {
-    alert('Seleccioná una provincia antes de subir el PDF');
-    return;
-  }
-  const pw = document.getElementById('prog-wrap');
-  const pf = document.getElementById('prog-fill');
-  const pl = document.getElementById('prog-lbl');
-  pw.style.display = 'block';
-  pf.style.width = '5%';
-  pl.textContent = 'Enviando PDF al servidor...';
+  event.target.value = '';
 
   const fd = new FormData();
   fd.append('provincia', tabActual);
   fd.append('archivo', file);
 
-  try {
-    // Iniciar la subida en background
-    const promesa = fetch('/api/subir_pdf', {method:'POST', body:fd});
+  document.getElementById('progress-lbl').textContent = 'Subiendo PDF...';
+  document.getElementById('progress-fill').style.width = '5%';
 
-    // Esperar 2 segundos para que el servidor arranque a procesar
-    await new Promise(r => setTimeout(r, 2000));
-    pf.style.width = '15%';
-    pl.textContent = 'Procesando... (espere)';
-
-    // Polling: consultar progreso cada 2 segundos
-    // Como no tenemos el tarea_id todavía, mostramos animación simple
-    let dots = 0;
-    const intervalo = setInterval(() => {
-      dots = (dots + 1) % 4;
-      const barra = Math.min(15 + dots * 5, 85);
-      pf.style.width = barra + '%';
-      pl.textContent = 'Procesando páginas' + '.'.repeat(dots + 1);
-    }, 2000);
-
-    // Esperar que termine
-    const r = await promesa;
-    clearInterval(intervalo);
-
-    if (!r.ok) {
-      const err = await r.json();
-      pl.textContent = '❌ Error: ' + (err.detail || 'Error desconocido');
-      pf.style.width = '0%';
-      console.error(err.detail);
-      return;
-    }
-
-    const d = await r.json();
-    pf.style.width = '100%';
-    pl.textContent = `✅ ${d.detectados} cupones en ${d.paginas} páginas`;
-    cargarTabla();
-    cargarBalance();
-    setTimeout(() => { pw.style.display = 'none'; pf.style.width='0%'; }, 5000);
-
-  } catch(err) {
-    pl.textContent = '❌ Error al procesar — revisá los logs en Render';
-    console.error(err);
+  const res = await fetch('/api/subir_pdf', { method: 'POST', body: fd });
+  if (!res.ok) {
+    const err = await res.text();
+    document.getElementById('progress-lbl').textContent = '❌ Error';
+    return alert('Error al procesar PDF:\n' + err);
   }
-  e.target.value = '';
-}
+  const data = await res.json();
 
-// ── BALANCE ───────────────────────────────────────
-async function cargarBalance() {
-  const r = await fetch(`/api/balance?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const data = await r.json();
-  const body = document.getElementById('bal-body');
-  body.innerHTML = '';
-  let totalCobrado = 0;
-  data.forEach(d => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d.provincia.substring(0,6)}</td><td>${d.cant}</td>
-      <td>$${(d.inicial||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</td>
-      <td>$${(d.cobrado||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</td>`;
-    body.appendChild(tr);
-    totalCobrado += d.cobrado || 0;
-  });
-  document.getElementById('lbl-caja').textContent =
-    `CAJA DEL DÍA: $${totalCobrado.toLocaleString('es-AR',{maximumFractionDigits:0})}`;
-}
-
-// ── BALANCE DIARIO ────────────────────────────────
-async function mostrarBalanceDiario() {
-  const r = await fetch('/api/balance_diario');
-  const d = await r.json();
-  if (!d.clientes?.length) { alert('No hay pagos registrados hoy.'); return; }
-
-  const sep  = '='.repeat(60);
-  const sep2 = '-'.repeat(60);
-  let txt = `${sep}\n   BALANCE DIARIO — DENTAL WHITE\n   Fecha: ${d.fecha}\n${sep}\n`;
-  txt += `   Clientes cobrados: ${d.total_clientes}\n`;
-  txt += `   Total recaudado:   $${d.total_general.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `${sep2}\n   DESGLOSE POR MÉTODO:\n`;
-  txt += `   💵 Efectivo:       $${d.total_efectivo.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   🏦 Transferencia:  $${d.total_transfer.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   📱 Mercado Pago:   $${d.total_mp.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   💳 Tarjeta:        $${d.total_tarjeta.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `${sep}\n   DETALLE POR CLIENTE:\n${sep2}\n`;
-
-  let provAct = '';
-  d.clientes.forEach(c => {
-    if (c.provincia !== provAct) {
-      provAct = c.provincia;
-      txt += `\n  ── ${provAct.toUpperCase()} ──\n`;
+  // Polling progreso
+  const tareaId = data.tarea_id;
+  const interval = setInterval(async () => {
+    const pr = await fetch(`/api/progreso/${tareaId}`);
+    const pd = await pr.json();
+    const pct = pd.total ? Math.round((pd.pagina / pd.total) * 100) : 100;
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-lbl').textContent =
+      pd.estado === 'listo'
+        ? `✅ Listo — ${pd.detectados} cupones`
+        : `Procesando ${pd.pagina}/${pd.total} páginas...`;
+    if (pd.estado !== 'procesando') {
+      clearInterval(interval);
+      cargarTab(tabActual);
     }
-    const multi = c.multi ? '  ⭐ MULTI-CUOTA' : '';
-    txt += `  • ${(c.nombre||'').padEnd(35)} Cuota(s): ${c.cuotas_str||'-'}   $${c.total.toLocaleString('es-AR',{maximumFractionDigits:0})}${multi}\n`;
-    if (c.comentario) txt += `    Nota: ${c.comentario}\n`;
-  });
-  txt += `\n${sep}`;
-
-  abrirModal('📊 BALANCE DIARIO', txt, [
-    {txt:'Cerrar', color:'#7f8c8d', fn:'cerrarModal()'}
-  ]);
+  }, 800);
 }
 
-// ── INICIAR MES ───────────────────────────────────
+// ── AGREGAR MANUAL ──
+async function agregarManual() {
+  if (tabActual === '✅ PAGOS HOY') return alert('Seleccioná una provincia primero');
+  const fd = new FormData();
+  fd.append('provincia', tabActual);
+  await fetch('/api/cupon/agregar', { method: 'POST', body: fd });
+  cargarTab(tabActual);
+}
+
+// ── ELIMINAR ──
+async function eliminarCupon() {
+  if (!currId) return alert('Seleccioná un cupón');
+  if (!confirm('¿Eliminar este cupón?')) return;
+  await fetch(`/api/cupon/${currId}`, { method: 'DELETE' });
+  currId = null;
+  cargarTab(tabActual);
+}
+
+// ── MODAL ──
+function abrirModal(html) {
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function cerrarModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ── INICIAR MES ──
 async function mostrarIniciarMes() {
-  const r = await fetch(`/api/iniciar_mes/preview?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const data = await r.json();
-
-  const sep = '='.repeat(60);
-  let txt = `${sep}\n   BALANCE INICIAL DEL MES — DENTAL WHITE\n${sep}\n`;
-  let totCli=0, totCup=0, totMonto=0;
-  data.forEach(d => {
-    txt += `\n  ── ${d.provincia.toUpperCase()} ──\n`;
-    txt += `     Clientes:    ${d.clientes}\n`;
-    txt += `     Cupones:     ${d.cupones}\n`;
-    txt += `     A recaudar:  $${d.monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    totCli += d.clientes; totCup += d.cupones; totMonto += d.monto;
-  });
-  txt += `\n${'-'.repeat(60)}\n   TOTALES:\n`;
-  txt += `   Clientes:    ${totCli}\n`;
-  txt += `   Cupones:     ${totCup}\n`;
-  txt += `   A recaudar:  $${totMonto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n${sep}`;
-
-  abrirModal('📅 BALANCE INICIO DE MES', txt, [
-    {txt:'Cerrar', color:'#27ae60', fn:'cerrarModal()'}
-  ]);
+  const res = await fetch(`/api/iniciar_mes/preview?provincias=${encodeURIComponent(provincias.join(','))}`);
+  const data = await res.json();
+  let rows = data.map(d => `<tr>
+    <td>${d.provincia}</td><td>${d.clientes}</td>
+    <td>${d.cupones}</td><td>$${(d.monto||0).toLocaleString('es-AR')}</td>
+  </tr>`).join('');
+  abrirModal(`
+    <h2>📅 Iniciar Mes</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Resumen de cupones PENDIENTES actuales:</p>
+    <table class="modal-table">
+      <thead><tr><th>Provincia</th><th>Clientes</th><th>Cupones</th><th>Monto</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>
+  `);
 }
 
-// ── CIERRE ────────────────────────────────────────
+// ── CIERRE ──
 async function mostrarCierre() {
-  const r = await fetch(`/api/cierre?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const d = await r.json();
-
-  const sep = '='.repeat(60);
-  const hoy = new Date().toLocaleDateString('es-AR');
-  let txt = `${sep}\n   CIERRE DE MES — DENTAL WHITE\n   Fecha: ${hoy}\n${sep}\n`;
-
-  let totCob=0, totPend=0, totCliCob=0, totCliPend=0;
-  d.provincias.forEach(p => {
-    txt += `\n  ── ${p.provincia.toUpperCase()} ──\n`;
-    txt += `     ✅ Cobrado:    ${p.cobrado_cant} cupones   $${p.cobrado_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    txt += `     ⏳ Pendiente:  ${p.pendiente_cant} clientes  $${p.pendiente_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    totCob += p.cobrado_monto; totPend += p.pendiente_monto;
-    totCliCob += p.cobrado_cant; totCliPend += p.pendiente_cant;
-  });
-
-  txt += `\n${'-'.repeat(60)}\n   TOTALES:\n`;
-  txt += `   ✅ Cobrado:   ${totCliCob} cupones   $${totCob.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   ⏳ Pendiente: ${totCliPend} clientes  $${totPend.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-
-  if (Object.keys(d.metodos).length) {
-    txt += `\n${'-'.repeat(60)}\n   DESGLOSE POR MÉTODO:\n`;
-    Object.entries(d.metodos).forEach(([m, v]) => {
-      txt += `   ${m.padEnd(20)} ${v.cant} pagos   $${v.monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    });
-  }
-  txt += `\n${sep}\n\n⚠️  Si confirmás el cierre se borran TODOS los clientes\n   de tus provincias para empezar el mes nuevo.`;
-
-  abrirModal('📝 CIERRE DE MES', txt, [
-    {txt:'❌ Cancelar',         color:'#7f8c8d', fn:'cerrarModal()'},
-    {txt:'✅ Confirmar Cierre', color:'#c0392b', fn:'confirmarCierre()'}
-  ]);
+  const res = await fetch(`/api/cierre?provincias=${encodeURIComponent(provincias.join(','))}`);
+  const data = await res.json();
+  let rows = data.provincias.map(d => `<tr>
+    <td>${d.provincia}</td>
+    <td>${d.cobrado_cant} cupones — $${(d.cobrado_monto||0).toLocaleString('es-AR')}</td>
+    <td>${d.pendiente_cant} clientes — $${(d.pendiente_monto||0).toLocaleString('es-AR')}</td>
+  </tr>`).join('');
+  let metRows = Object.entries(data.metodos).map(([m, v]) =>
+    `<tr><td>${m}</td><td>${v.cant}</td><td>$${(v.monto||0).toLocaleString('es-AR')}</td></tr>`).join('');
+  abrirModal(`
+    <h2>📝 Cierre del Día</h2>
+    <table class="modal-table" style="margin-bottom:16px">
+      <thead><tr><th>Provincia</th><th>Cobrado</th><th>Pendiente</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Por método de pago:</p>
+    <table class="modal-table" style="margin-bottom:16px">
+      <thead><tr><th>Método</th><th>Cant</th><th>Monto</th></tr></thead>
+      <tbody>${metRows}</tbody>
+    </table>
+    <div class="modal-footer">
+      <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn-modal btn-modal-rojo" onclick="confirmarCierre()">🗑️ Borrar todos los cupones</button>
+    </div>
+  `);
 }
 
 async function confirmarCierre() {
-  cerrarModal();
+  if (!confirm('¿Seguro? Esto borrará TODOS los cupones de tus provincias.')) return;
   const fd = new FormData();
   fd.append('provincias', provincias.join(','));
-  await fetch('/api/cierre/confirmar', {method:'POST', body:fd});
-  currId = null;
-  cargarTabla(); cargarBalance();
-  alert('✅ Cierre confirmado. Mes reiniciado correctamente.');
+  await fetch('/api/cierre/confirmar', { method: 'POST', body: fd });
+  cerrarModal();
+  cargarTab(tabActual);
 }
 
-// ── MODAL HELPER ─────────────────────────────────
-function abrirModal(titulo, texto, botones) {
-  document.getElementById('modal-titulo').textContent = titulo;
-  document.getElementById('modal-texto').textContent  = texto;
-  const bd = document.getElementById('modal-btns');
-  bd.innerHTML = '';
-  botones.forEach(b => {
-    const btn = document.createElement('button');
-    btn.textContent = b.txt;
-    btn.style.background = b.color;
-    btn.style.color = 'white';
-    btn.onclick = () => eval(b.fn);
-    bd.appendChild(btn);
-  });
-  document.getElementById('modal-overlay').classList.add('show');
+// ── BALANCE DIARIO ──
+async function mostrarBalanceDiario() {
+  const res = await fetch('/api/balance_diario');
+  const d = await res.json();
+  let rows = d.clientes.map(c => `<tr>
+    <td>${c.nombre}</td><td>${c.provincia}</td>
+    <td>${c.cuotas_str}</td><td>$${(c.total||0).toLocaleString('es-AR')}</td>
+    <td>${c.medio}</td>
+  </tr>`).join('');
+  abrirModal(`
+    <h2>📊 Balance Diario — ${d.fecha}</h2>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      ${[
+        ['TOTAL', d.total_general, '#27ae60'],
+        ['EFECTIVO', d.total_efectivo, '#2ecc71'],
+        ['TRANSFERENCIA', d.total_transfer, '#3498db'],
+        ['MERCADO PAGO', d.total_mp, '#9b59b6'],
+        ['TARJETA', d.total_tarjeta, '#e67e22'],
+        ['CLIENTES', d.total_clientes, '#95a5a6'],
+      ].map(([l,v,c]) => `<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:1px">${l}</div>
+        <div style="font-size:18px;font-weight:700;color:${c}">${typeof v === 'number' && l !== 'CLIENTES' ? '$'+v.toLocaleString('es-AR') : v}</div>
+      </div>`).join('')}
+    </div>
+    <table class="modal-table">
+      <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Total</th><th>Método</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>
+  `);
 }
-function cerrarModal() {
-  document.getElementById('modal-overlay').classList.remove('show');
-}
-document.getElementById('modal-overlay').onclick = e => {
+
+// Cerrar modal al hacer click fuera
+document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('modal-overlay')) cerrarModal();
-};
+});
 </script>
 </body>
 </html>
