@@ -207,6 +207,7 @@ textarea.campo-inp { resize:vertical; min-height:60px; }
           <th>MONTO</th>
           <th>CTA</th>
           <th>FECHA</th>
+          <th>VISTO</th>
         </tr>
       </thead>
       <tbody id="tabla-body"></tbody>
@@ -351,6 +352,7 @@ function renderTabla(data) {
       <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
       <td>${r.cta||''}</td>
       <td>${r.fecha_cobro||''}</td>
+      <td style="text-align:center;font-size:16px">${r.visto ? '✅' : '🟡'}</td>
     `;
     tr.onclick = () => cargarDetalle(r.id);
     body.appendChild(tr);
@@ -464,9 +466,10 @@ async function agregarManual() {
   cargarTabla();
 }
 
-function marcarVisto() {
+async function marcarVisto() {
   if (!currId) return;
-  alert('Marcado como visto ✅');
+  await fetch(`/api/cupon/${currId}/visto`, {method:'POST'});
+  cargarTabla();
 }
 
 function enviarWA() {
