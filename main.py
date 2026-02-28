@@ -1,709 +1,461 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DENTAL WHITE — Panel</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; font-family: Arial, sans-serif; }
-body { background:#f0f2f5; display:flex; height:100vh; overflow:hidden; }
+import os, re, uuid, io, base64
+from datetime import datetime
+from collections import defaultdict
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from supabase import create_client, Client
+import cv2, numpy as np
+from PIL import Image
+from pdf2image import convert_from_bytes
+import pdfplumber
 
-/* PANEL IZQUIERDO */
-#pizq {
-  width:280px; min-width:280px; background:#2c3e50;
-  color:white; display:flex; flex-direction:column;
-  padding:16px; gap:10px; overflow-y:auto;
-}
-#pizq h2 { font-size:16px; text-align:center; padding:8px 0; }
-#usuario-badge {
-  background:#27ae60; border-radius:8px;
-  padding:8px; text-align:center; font-size:13px; font-weight:bold;
-}
-#tabla-balance { width:100%; border-collapse:collapse; font-size:12px; }
-#tabla-balance th { background:#1a252f; padding:6px 4px; }
-#tabla-balance td { padding:5px 4px; text-align:center; border-bottom:1px solid #3d5166; }
-#lbl-caja {
-  background:#27ae60; border-radius:8px;
-  padding:10px; text-align:center; font-size:14px; font-weight:bold;
-}
-.btn-panel {
-  padding:10px; border:none; border-radius:8px;
-  font-size:13px; font-weight:bold; cursor:pointer;
-  width:100%; transition: opacity .2s;
-}
-.btn-panel:hover { opacity:.85; }
-.leyenda { font-size:11px; text-align:center; color:#aaa; padding:4px 0; }
+# ── CONFIGURACIÓN ─────────────────────────────────
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")   # service_role key
+POPPLER_PATH = os.environ.get("POPPLER_PATH", None)  # None = usar PATH del sistema
 
-/* BARRA DE PROGRESO */
-#prog-wrap { display:none; }
-#prog-bar {
-  width:100%; height:8px; background:#1a252f;
-  border-radius:4px; overflow:hidden; margin-top:4px;
-}
-#prog-fill { height:100%; background:#27ae60; width:0%; transition:width .3s; }
-#prog-lbl { font-size:11px; color:#aaa; text-align:center; margin-top:3px; }
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-/* PANEL CENTRAL */
-#pcen {
-  flex:1; display:flex; flex-direction:column; overflow:hidden;
-}
-#tabs {
-  display:flex; background:#34495e; overflow-x:auto;
-  border-bottom:3px solid #27ae60;
-}
-.tab {
-  padding:12px 20px; cursor:pointer; color:#aaa;
-  font-size:13px; font-weight:bold; white-space:nowrap;
-  transition: all .2s; border-bottom:3px solid transparent;
-  margin-bottom:-3px;
-}
-.tab.activo { color:white; border-bottom-color:#27ae60; background:#2c3e50; }
-#buscar-wrap {
-  padding:10px 16px; background:white;
-  border-bottom:1px solid #ddd;
-}
-#buscar {
-  width:100%; padding:8px 12px; border:2px solid #ddd;
-  border-radius:8px; font-size:14px; outline:none;
-}
-#buscar:focus { border-color:#3498db; }
-#tabla-wrap { flex:1; overflow-y:auto; }
-table { width:100%; border-collapse:collapse; font-size:13px; }
-thead th {
-  background:#2c3e50; color:white; padding:10px 8px;
-  position:sticky; top:0; cursor:pointer; user-select:none;
-}
-thead th:hover { background:#3d5166; }
-tbody tr { border-bottom:1px solid #eee; cursor:pointer; transition:background .1s; }
-tbody tr:hover { background:#f8f9fa !important; }
-tbody tr.sel { background:#d5e8ff !important; }
-.verde   { background:#c8f0c8 !important; }
-.naranja { background:#ffd9a0 !important; }
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
-/* PANEL DERECHO */
-#pder {
-  width:380px; min-width:380px; background:white;
-  display:flex; flex-direction:column; overflow-y:auto;
-  border-left:2px solid #ddd; padding:16px; gap:10px;
-}
-#img-cupon {
-  width:100%; height:200px; background:#ecf0f1;
-  border-radius:8px; object-fit:contain;
-  display:flex; align-items:center; justify-content:center;
-  color:#aaa; font-size:13px; overflow:hidden;
-}
-#img-cupon img { width:100%; height:100%; object-fit:contain; }
-.campo-lbl { font-size:11px; font-weight:bold; color:#555; margin-bottom:2px; }
-.campo-inp {
-  width:100%; padding:8px 10px; border:2px solid #e0e0e0;
-  border-radius:6px; font-size:13px; outline:none;
-}
-.campo-inp:focus { border-color:#3498db; }
-select.campo-inp { cursor:pointer; }
-.switch-row {
-  display:flex; align-items:center; gap:10px;
-  padding:6px 0;
-}
-.switch {
-  position:relative; width:48px; height:24px;
-}
-.switch input { opacity:0; width:0; height:0; }
-.slider {
-  position:absolute; cursor:pointer;
-  top:0; left:0; right:0; bottom:0;
-  background:#e74c3c; border-radius:24px;
-  transition:.3s;
-}
-.slider:before {
-  content:""; position:absolute;
-  height:18px; width:18px; left:3px; bottom:3px;
-  background:white; border-radius:50%; transition:.3s;
-}
-input:checked + .slider { background:#27ae60; }
-input:checked + .slider:before { transform:translateX(24px); }
-#lbl-estado { font-size:13px; font-weight:bold; }
-textarea.campo-inp { resize:vertical; min-height:60px; }
-.btn-acc {
-  width:100%; padding:10px; border:none; border-radius:8px;
-  font-size:13px; font-weight:bold; cursor:pointer;
-  transition: opacity .2s;
-}
-.btn-acc:hover { opacity:.85; }
-
-/* MODAL BALANCE */
-#modal-overlay {
-  display:none; position:fixed; inset:0;
-  background:rgba(0,0,0,.5); z-index:1000;
-  align-items:center; justify-content:center;
-}
-#modal-overlay.show { display:flex; }
-#modal {
-  background:white; border-radius:12px;
-  padding:30px; max-width:600px; width:90%;
-  max-height:85vh; overflow-y:auto;
-}
-#modal h2 { font-size:18px; margin-bottom:16px; color:#2c3e50; }
-#modal pre {
-  background:#f8f9fa; border-radius:8px;
-  padding:16px; font-size:12px; white-space:pre-wrap;
-  font-family: monospace; border:1px solid #ddd;
-}
-.modal-btns { display:flex; gap:10px; margin-top:16px; }
-.modal-btns button {
-  flex:1; padding:12px; border:none; border-radius:8px;
-  font-size:14px; font-weight:bold; cursor:pointer;
-}
-</style>
-</head>
-<body>
-
-<!-- PANEL IZQUIERDO -->
-<div id="pizq">
-  <h2>🦷 DENTAL WHITE</h2>
-  <div id="usuario-badge">CARGANDO...</div>
-
-  <table id="tabla-balance">
-    <thead><tr><th>PROV</th><th>CANT</th><th>INICIAL</th><th>COBRADO</th></tr></thead>
-    <tbody id="bal-body"></tbody>
-  </table>
-
-  <div id="lbl-caja">CAJA DEL DÍA: $0</div>
-
-  <div id="prog-wrap">
-    <div id="prog-bar"><div id="prog-fill"></div></div>
-    <div id="prog-lbl">Procesando...</div>
-  </div>
-
-  <!-- Botones -->
-  <label style="display:none" id="pdf-label">
-    <input type="file" id="pdf-input" accept=".pdf" style="display:none">
-    <div class="btn-panel" style="background:#27ae60">📥 SUBIR PDF</div>
-  </label>
-  <button class="btn-panel" style="background:#27ae60" onclick="document.getElementById('pdf-input').click()">📥 SUBIR PDF</button>
-  <input type="file" id="pdf-input" accept=".pdf" style="display:none">
-
-  <button class="btn-panel" style="background:#2980b9" onclick="agregarManual()">➕ AGREGAR</button>
-  <button class="btn-panel" style="background:#34495e" onclick="mostrarIniciarMes()">📅 INICIAR MES</button>
-  <button class="btn-panel" style="background:#7f8c8d" onclick="mostrarCierre()">📝 CIERRE</button>
-  <button class="btn-panel" style="background:#c0392b" onclick="eliminarCliente()">❌ ELIMINAR</button>
-  <button class="btn-panel" style="background:#e67e22" onclick="mostrarBalanceDiario()">📊 BALANCE DIARIO</button>
-
-  <div class="leyenda">🟢 Guardado/Pagado &nbsp; 🟠 Cuota vieja</div>
-</div>
-
-<!-- PANEL CENTRAL -->
-<div id="pcen">
-  <div id="tabs"></div>
-  <div id="buscar-wrap">
-    <input id="buscar" placeholder="🔍 Buscar cliente..." oninput="cargarTabla()">
-  </div>
-  <div id="tabla-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th onclick="ordenarPorN()">N° ↕</th>
-          <th>AFILIADO</th>
-          <th>MONTO</th>
-          <th>CTA</th>
-          <th>FECHA</th>
-          <th>VISTO</th>
-        </tr>
-      </thead>
-      <tbody id="tabla-body"></tbody>
-    </table>
-  </div>
-</div>
-
-<!-- PANEL DERECHO -->
-<div id="pder">
-  <div id="img-cupon"><span>Sin imagen</span></div>
-
-  <div><div class="campo-lbl">N° AFILIADO</div>
-  <input class="campo-inp" id="e-cta"></div>
-
-  <div><div class="campo-lbl">AFILIADO</div>
-  <input class="campo-inp" id="e-nom"></div>
-
-  <div><div class="campo-lbl">MONTO $</div>
-  <input class="campo-inp" id="e-mon" type="number"></div>
-
-  <div><div class="campo-lbl">CTA (CUOTA)</div>
-  <input class="campo-inp" id="e-cuo"></div>
-
-  <div><div class="campo-lbl">FECHA COBRO</div>
-  <input class="campo-inp" id="e-fec"></div>
-
-  <div><div class="campo-lbl">WHATSAPP</div>
-  <input class="campo-inp" id="e-tel" type="tel"></div>
-
-  <div><div class="campo-lbl">MÉTODO DE PAGO</div>
-  <select class="campo-inp" id="e-pag">
-    <option>EFECTIVO</option>
-    <option>TRANSFERENCIA</option>
-    <option>MERCADO PAGO</option>
-    <option>TARJETA</option>
-  </select></div>
-
-  <div class="switch-row">
-    <label class="switch">
-      <input type="checkbox" id="sw-estado" onchange="toggleEstado()">
-      <span class="slider"></span>
-    </label>
-    <span id="lbl-estado" style="color:#e74c3c">PENDIENTE</span>
-  </div>
-
-  <div><div class="campo-lbl">COMENTARIO</div>
-  <input class="campo-inp" id="e-com"></div>
-
-  <div><div class="campo-lbl">MENSAJE WHATSAPP</div>
-  <textarea class="campo-inp" id="e-msg">Hola! Le informamos que su cupón de pago Dental White está disponible. Ante cualquier consulta no dude en contactarnos.</textarea></div>
-
-  <button class="btn-acc" style="background:#27ae60;color:white;font-size:15px;padding:14px"
-          onclick="registrarPago()">✅ REGISTRAR PAGO</button>
-  <button class="btn-acc" style="background:#f39c12;color:white" onclick="marcarVisto()">👁️ VISTO</button>
-  <button class="btn-acc" style="background:#34495e;color:white" onclick="guardarDatos()">💾 GUARDAR CAMBIOS</button>
-  <button class="btn-acc" style="background:#2ecc71;color:white" onclick="enviarWA()">🟢 ENVIAR WHATSAPP</button>
-</div>
-
-<!-- MODAL -->
-<div id="modal-overlay">
-  <div id="modal">
-    <h2 id="modal-titulo"></h2>
-    <pre id="modal-texto"></pre>
-    <div class="modal-btns" id="modal-btns"></div>
-  </div>
-</div>
-
-<script>
-// ── ESTADO GLOBAL ───────────────────────────────
-let usuario = '', provincias = [], tabActual = '', currId = null;
-let ordenN = true, filas = [];
-
-// ── INIT ─────────────────────────────────────────
-window.onload = () => {
-  usuario   = sessionStorage.getItem('usuario');
-  provincias = JSON.parse(sessionStorage.getItem('provincias') || '[]');
-  if (!usuario) { window.location = '/'; return; }
-
-  document.getElementById('usuario-badge').textContent = '👤 ' + usuario;
-
-  // Crear tabs
-  const tabs = document.getElementById('tabs');
-  ['✅ PAGOS HOY', ...provincias].forEach(p => {
-    const t = document.createElement('div');
-    t.className = 'tab';
-    t.textContent = p;
-    t.onclick = () => cambiarTab(p);
-    tabs.appendChild(t);
-  });
-
-  // PDF input
-  document.getElementById('pdf-input').onchange = subirPDF;
-
-  cambiarTab('✅ PAGOS HOY');
-  cargarBalance();
-};
-
-// ── TABS ──────────────────────────────────────────
-function cambiarTab(prov) {
-  tabActual = prov;
-  document.querySelectorAll('.tab').forEach(t => {
-    t.classList.toggle('activo', t.textContent === prov);
-  });
-  document.getElementById('buscar').value = '';
-  cargarTabla();
+PROVINCIAS = {
+    "NENNELLA":       ["BUENOS AIRES", "CORRIENTES", "SANTIAGO DEL ESTERO"],
+    "MICAELA":        ["POSADAS", "SANTA FE"],
+    "ADMINISTRADORA": ["BUENOS AIRES", "CORRIENTES", "SANTIAGO DEL ESTERO", "POSADAS", "SANTA FE"]
 }
 
-// ── TABLA ─────────────────────────────────────────
-async function cargarTabla() {
-  const buscar = document.getElementById('buscar').value;
-  let url, data;
+# ── RUTAS PRINCIPALES ─────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def login(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
 
-  if (tabActual === '✅ PAGOS HOY') {
-    const r = await fetch('/api/cupones/hoy');
-    data = await r.json();
-    // Filtrar por búsqueda
-    if (buscar) data = data.filter(d =>
-      (d.nombre||'').toLowerCase().includes(buscar.toLowerCase()));
-    // Color: siempre verde en pagos hoy
-    data.forEach(d => d.color = 'verde');
-  } else {
-    const r = await fetch(`/api/cupones?provincia=${encodeURIComponent(tabActual)}&buscar=${encodeURIComponent(buscar)}`);
-    data = await r.json();
-  }
+@app.post("/login")
+async def do_login(usuario: str = Form(...), clave: str = Form(...)):
+    if clave.lower() != "union":
+        raise HTTPException(status_code=401, detail="Clave incorrecta")
+    if usuario not in PROVINCIAS:
+        raise HTTPException(status_code=401, detail="Usuario inválido")
+    return {"ok": True, "usuario": usuario, "provincias": PROVINCIAS[usuario]}
 
-  filas = data;
-  renderTabla(data);
-}
+@app.get("/panel", response_class=HTMLResponse)
+async def panel(request: Request):
+    return templates.TemplateResponse("panel.html", {"request": request})
 
-function renderTabla(data) {
-  const body = document.getElementById('tabla-body');
-  body.innerHTML = '';
-  data.forEach(r => {
-    const tr = document.createElement('tr');
-    if (r.color === 'verde')   tr.classList.add('verde');
-    if (r.color === 'naranja') tr.classList.add('naranja');
-    if (currId === r.id)       tr.classList.add('sel');
-    tr.innerHTML = `
-      <td>${r.id}</td>
-      <td>${r.cuenta||''}</td>
-      <td style="text-align:left;padding-left:8px">${r.nombre||''}</td>
-      <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
-      <td>${r.cta||''}</td>
-      <td>${r.fecha_cobro||''}</td>
-      <td style="text-align:center;font-size:16px">${r.visto ? '✅' : '🟡'}</td>
-    `;
-    tr.onclick = () => cargarDetalle(r.id);
-    body.appendChild(tr);
-  });
-}
+# ── CUPONES ───────────────────────────────────────
+@app.get("/api/cupones")
+async def get_cupones(provincia: str, buscar: str = ""):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    q = supabase.table("cupones")\
+        .select("*")\
+        .or_(f"estado.eq.PENDIENTE,fecha_pago.eq.{hoy}")\
+        .eq("provincia", provincia)
+    if buscar:
+        q = q.ilike("nombre", f"%{buscar}%")
+    res = q.order("fecha_cobro").execute()
+    rows = res.data
 
-// ── ORDENAR POR N° ───────────────────────────────
-function ordenarPorN() {
-  filas.sort((a,b) => {
-    const na = parseInt(a.cuenta)||99999;
-    const nb = parseInt(b.cuenta)||99999;
-    return ordenN ? na-nb : nb-na;
-  });
-  ordenN = !ordenN;
-  renderTabla(filas);
-}
+    # Detectar cuotas viejas: cuenta con 2+ pendientes
+    cuentas_multi = set()
+    conteo = defaultdict(int)
+    for r in rows:
+        if r["estado"] == "PENDIENTE":
+            clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+            conteo[clave] += 1
+    for clave, cant in conteo.items():
+        if cant > 1:
+            cuentas_multi.add(clave)
 
-// ── DETALLE ───────────────────────────────────────
-async function cargarDetalle(id) {
-  currId = id;
-  const r = await fetch(`/api/cupon/${id}`);
-  const d = await r.json();
+    for r in rows:
+        clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+        if r["estado"] == "PAGADO":
+            r["color"] = "verde"
+        elif r.get("listo"):
+            r["color"] = "verde"
+        elif clave in cuentas_multi:
+            r["color"] = "naranja"
+        else:
+            r["color"] = ""
+    return rows
 
-  document.getElementById('e-cta').value = d.cuenta || '';
-  document.getElementById('e-nom').value = d.nombre || '';
-  document.getElementById('e-mon').value = d.monto  || '';
-  document.getElementById('e-cuo').value = d.cta    || '';
-  document.getElementById('e-fec').value = d.fecha_cobro || '';
-  document.getElementById('e-tel').value = d.telefono || '';
-  document.getElementById('e-com').value = d.comentario || '';
-  if (d.medio_pago) document.getElementById('e-pag').value = d.medio_pago;
+@app.get("/api/cupones/hoy")
+async def get_pagos_hoy():
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    res = supabase.table("cupones")\
+        .select("*")\
+        .eq("fecha_pago", hoy)\
+        .order("nombre").execute()
+    return res.data
 
-  // Switch estado
-  const pagado = d.estado === 'PAGADO';
-  document.getElementById('sw-estado').checked = pagado;
-  document.getElementById('lbl-estado').textContent = pagado ? 'PAGADO' : 'PENDIENTE';
-  document.getElementById('lbl-estado').style.color  = pagado ? '#27ae60' : '#e74c3c';
+@app.get("/api/cupon/{cupon_id}")
+async def get_cupon(cupon_id: int):
+    res = supabase.table("cupones").select("*").eq("id", cupon_id).execute()
+    if not res.data:
+        raise HTTPException(404, "No encontrado")
+    return res.data[0]
 
-  // Imagen
-  const imgDiv = document.getElementById('img-cupon');
-  if (d.img_path) {
-    imgDiv.innerHTML = `<img src="${d.img_path}" alt="cupón">`;
-  } else {
-    imgDiv.innerHTML = '<span>Sin imagen</span>';
-  }
+@app.post("/api/cupon/{cupon_id}/pago")
+async def registrar_pago(cupon_id: int,
+                          medio_pago: str = Form(...),
+                          comentario: str = Form("")):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    supabase.table("cupones").update({
+        "estado": "PAGADO",
+        "fecha_pago": hoy,
+        "medio_pago": medio_pago,
+        "comentario": comentario,
+        "listo": True
+    }).eq("id", cupon_id).execute()
+    return {"ok": True}
 
-  // Resaltar fila
-  document.querySelectorAll('#tabla-body tr').forEach(tr => tr.classList.remove('sel'));
-  const trs = document.querySelectorAll('#tabla-body tr');
-  trs.forEach(tr => { if (parseInt(tr.cells[0].textContent) === id) tr.classList.add('sel'); });
-}
+@app.post("/api/cupon/{cupon_id}/impago")
+async def marcar_impago(cupon_id: int):
+    supabase.table("cupones").update({
+        "estado": "PENDIENTE",
+        "fecha_pago": None,
+        "medio_pago": None,
+        "listo": False
+    }).eq("id", cupon_id).execute()
+    return {"ok": True}
 
-// ── ACCIONES ─────────────────────────────────────
-async function registrarPago() {
-  if (!currId) return;
-  const fd = new FormData();
-  fd.append('medio_pago', document.getElementById('e-pag').value);
-  fd.append('comentario', document.getElementById('e-com').value);
-  await fetch(`/api/cupon/${currId}/pago`, {method:'POST', body:fd});
-  cargarTabla(); cargarBalance();
-}
+@app.post("/api/cupon/{cupon_id}/visto")
+async def marcar_visto(cupon_id: int):
+    supabase.table("cupones").update({"visto": 1}).eq("id", cupon_id).execute()
+    return {"ok": True}
 
-async function toggleEstado() {
-  if (!currId) return;
-  const pagado = document.getElementById('sw-estado').checked;
-  document.getElementById('lbl-estado').textContent = pagado ? 'PAGADO' : 'PENDIENTE';
-  document.getElementById('lbl-estado').style.color  = pagado ? '#27ae60' : '#e74c3c';
+@app.post("/api/cupon/{cupon_id}/guardar")
+async def guardar_cupon(cupon_id: int,
+                         cuenta: str = Form(""),
+                         nombre: str = Form(""),
+                         monto: str = Form(""),
+                         cta: str = Form(""),
+                         fecha_cobro: str = Form(""),
+                         telefono: str = Form(""),
+                         comentario: str = Form("")):
+    supabase.table("cupones").update({
+        "cuenta": cuenta, "nombre": nombre,
+        "monto": float(monto) if monto else 0,
+        "cta": cta, "fecha_cobro": fecha_cobro,
+        "telefono": telefono, "comentario": comentario,
+        "listo": True
+    }).eq("id", cupon_id).execute()
+    return {"ok": True}
 
-  if (pagado) {
-    const fd = new FormData();
-    fd.append('medio_pago', document.getElementById('e-pag').value);
-    fd.append('comentario', document.getElementById('e-com').value);
-    await fetch(`/api/cupon/${currId}/pago`, {method:'POST', body:fd});
-  } else {
-    await fetch(`/api/cupon/${currId}/impago`, {method:'POST'});
-  }
-  cargarTabla(); cargarBalance();
-}
+@app.delete("/api/cupon/{cupon_id}")
+async def eliminar_cupon(cupon_id: int):
+    supabase.table("cupones").delete().eq("id", cupon_id).execute()
+    return {"ok": True}
 
-async function guardarDatos() {
-  if (!currId) return;
-  const fd = new FormData();
-  fd.append('cuenta',      document.getElementById('e-cta').value);
-  fd.append('nombre',      document.getElementById('e-nom').value);
-  fd.append('monto',       document.getElementById('e-mon').value);
-  fd.append('cta',         document.getElementById('e-cuo').value);
-  fd.append('fecha_cobro', document.getElementById('e-fec').value);
-  fd.append('telefono',    document.getElementById('e-tel').value);
-  fd.append('comentario',  document.getElementById('e-com').value);
-  await fetch(`/api/cupon/${currId}/guardar`, {method:'POST', body:fd});
-  cargarTabla(); cargarBalance();
-  alert('✅ Guardado');
-}
+@app.post("/api/cupon/agregar")
+async def agregar_manual(provincia: str = Form(...)):
+    supabase.table("cupones").insert({
+        "nombre": "NUEVO", "provincia": provincia,
+        "estado": "PENDIENTE", "monto": 0, "balance_inicial": 0
+    }).execute()
+    return {"ok": True}
 
-async function eliminarCliente() {
-  if (!currId) return;
-  if (!confirm('¿Eliminar este cliente?')) return;
-  await fetch(`/api/cupon/${currId}`, {method:'DELETE'});
-  currId = null;
-  cargarTabla(); cargarBalance();
-}
+# ── IMAGEN DEL CUPÓN ─────────────────────────────
+@app.get("/api/cupon/{cupon_id}/imagen")
+async def get_imagen(cupon_id: int):
+    res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
+    if not res.data or not res.data[0].get("img_path"):
+        raise HTTPException(404, "Sin imagen")
+    # img_path es URL de Supabase Storage
+    return {"url": res.data[0]["img_path"]}
 
-async function agregarManual() {
-  if (!tabActual || tabActual === '✅ PAGOS HOY') {
-    alert('Seleccioná una provincia primero');
-    return;
-  }
-  const fd = new FormData();
-  fd.append('provincia', tabActual);
-  await fetch('/api/cupon/agregar', {method:'POST', body:fd});
-  cargarTabla();
-}
+# ── OCR / SUBIR PDF ──────────────────────────────
+progreso_tareas = {}  # tarea_id → {pagina, total, detectados, estado}
 
-async function marcarVisto() {
-  if (!currId) return;
-  await fetch(`/api/cupon/${currId}/visto`, {method:'POST'});
-  cargarTabla();
-}
+@app.get("/api/progreso/{tarea_id}")
+async def get_progreso(tarea_id: str):
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "estado": "procesando"})
 
-async function enviarWA() {
-  const tel = document.getElementById('e-tel').value.replace(/\D/g,'');
-  if (!tel) { alert('Este cliente no tiene número de WhatsApp'); return; }
-  const msg = encodeURIComponent(document.getElementById('e-msg').value.trim());
+@app.post("/api/subir_pdf")
+async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
+    import asyncio
+    contenido = await archivo.read()
+    detectados = 0
+    prov_actual = provincia.strip().upper()
+    tarea_id = uuid.uuid4().hex
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "estado": "procesando"}
 
-  // Abrir WhatsApp Web con el mensaje
-  window.open(`https://web.whatsapp.com/send?phone=549${tel}&text=${msg}`, '_blank');
+    try:
+        with pdfplumber.open(io.BytesIO(contenido)) as pdf:
+            total = len(pdf.pages)
+            progreso_tareas[tarea_id]["total"] = total
 
-  // Si hay imagen, abrirla en nueva pestaña para poder guardarla o copiarla
-  if (currId) {
-    const r = await fetch(`/api/cupon/${currId}`);
-    const d = await r.json();
-    if (d.img_path) {
-      setTimeout(() => {
-        window.open(d.img_path, '_blank');
-        alert('💡 La imagen del cupón se abrió en una nueva pestaña.\nGuardala o copiala y pegala en WhatsApp.');
-      }, 1000);
-    }
-  }
-}
+            for idx, pagina in enumerate(pdf.pages):
+                progreso_tareas[tarea_id]["pagina"] = idx + 1
 
-// ── SUBIR PDF ─────────────────────────────────────
-async function subirPDF(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (!tabActual || tabActual === '✅ PAGOS HOY') {
-    alert('Seleccioná una provincia antes de subir el PDF');
-    return;
-  }
-  const pw = document.getElementById('prog-wrap');
-  const pf = document.getElementById('prog-fill');
-  const pl = document.getElementById('prog-lbl');
-  pw.style.display = 'block';
-  pf.style.width = '5%';
-  pl.textContent = 'Enviando PDF al servidor...';
+                pw, ph = float(pagina.width), float(pagina.height)
+                anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
+                anclas_izq = sorted(
+                    [f for f in anclas if f['x0'] < pw / 2],
+                    key=lambda f: f['top'])
+                if not anclas_izq:
+                    continue
 
-  const fd = new FormData();
-  fd.append('provincia', tabActual);
-  fd.append('archivo', file);
+                # Convertir solo esta página — usando pdf_kwargs para no pisar variables
+                pdf_kwargs = {"first_page": idx+1, "last_page": idx+1, "dpi": 200}
+                if POPPLER_PATH:
+                    pdf_kwargs["poppler_path"] = POPPLER_PATH
+                imgs    = convert_from_bytes(contenido, **pdf_kwargs)
+                img_pil = imgs[0]
+                img_cv  = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                hi, wi  = img_cv.shape[:2]
+                escala_y = hi / ph
+                escala_x = wi / pw
 
-  try {
-    // Iniciar la subida en background
-    const promesa = fetch('/api/subir_pdf', {method:'POST', body:fd});
+                for i, f in enumerate(anclas_izq):
+                    y0_pdf = max(0, f['top'] - 5)
+                    y1_pdf = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
 
-    // Esperar 2 segundos para que el servidor arranque a procesar
-    await new Promise(r => setTimeout(r, 2000));
-    pf.style.width = '15%';
-    pl.textContent = 'Procesando... (espere)';
+                    # Izquierda: teléfono
+                    txt_izq = pagina.within_bbox((0, y0_pdf, pw/2, y1_pdf)).extract_text() or ""
+                    tel = "S/D"
+                    m_tel = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', txt_izq, re.IGNORECASE)
+                    if m_tel:
+                        nums = re.findall(r'\d{8,12}', m_tel.group(1))
+                        if nums: tel = nums[0]
+                    if tel == "S/D":
+                        nums = re.findall(r'\d{10}', txt_izq)
+                        if nums: tel = nums[0]
 
-    // Polling: consultar progreso cada 2 segundos
-    // Como no tenemos el tarea_id todavía, mostramos animación simple
-    let dots = 0;
-    const intervalo = setInterval(() => {
-      dots = (dots + 1) % 4;
-      const barra = Math.min(15 + dots * 5, 85);
-      pf.style.width = barra + '%';
-      pl.textContent = 'Procesando páginas' + '.'.repeat(dots + 1);
-    }, 2000);
+                    # Derecha: datos
+                    txt_der = pagina.within_bbox((pw/2, y0_pdf, pw, y1_pdf)).extract_text() or ""
 
-    // Esperar que termine
-    const r = await promesa;
-    clearInterval(intervalo);
+                    # N° afiliado
+                    cta_n = "S/D"
+                    m_cta = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
+                    if m_cta: cta_n = m_cta.group(1)
 
-    if (!r.ok) {
-      const err = await r.json();
-      pl.textContent = '❌ Error: ' + (err.detail || 'Error desconocido');
-      pf.style.width = '0%';
-      console.error(err.detail);
-      return;
+                    # Nombre — usando palabras_clave para no pisar variables
+                    nom = "S/D"
+                    palabras_clave = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+                    if "AFILIADO" in txt_der.upper():
+                        try:
+                            parte = txt_der.upper().split("AFILIADO")[1]
+                            lineas = [l.strip() for l in parte.split('\n') if l.strip()]
+                            parts = []
+                            for linea in lineas[:2]:
+                                limpia = re.sub(r'[^A-Z\s]', '', linea).strip()
+                                if limpia and not any(pk in limpia for pk in palabras_clave):
+                                    parts.append(limpia)
+                                else:
+                                    break
+                            nom = ' '.join(parts).strip() or "S/D"
+                        except: pass
+
+                    # Monto
+                    monto = 0.0
+                    if "$" in txt_der:
+                        try:
+                            mp = txt_der.split("$")[-1].split()[0]
+                            ml = re.sub(r'[^\d]', '', mp.split('.')[0])
+                            if ml: monto = float(ml)
+                        except: pass
+
+                    # Cuota
+                    cta_cuota = "S/D"
+                    mc = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
+                    if mc: cta_cuota = mc.group(1)
+
+                    # Fecha
+                    f_cobro = ""
+                    mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
+                    if mf: f_cobro = mf.group(1)
+
+                    # Recorte mitad derecha → Supabase Storage
+                    y0_img = int(y0_pdf * escala_y)
+                    y1_img = int(y1_pdf * escala_y)
+                    x0_img = int((pw/2) * escala_x)
+                    recorte = img_cv[y0_img:y1_img, x0_img:wi]
+
+                    img_url = ""
+                    if recorte.size > 0:
+                        try:
+                            nombre_img = f"{uuid.uuid4().hex}.jpg"
+                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            img_bytes = buf.tobytes()
+                            supabase.storage.from_("cupones").upload(
+                                path=nombre_img,
+                                file=img_bytes,
+                                file_options={"content-type": "image/jpeg"}
+                            )
+                            img_url = supabase.storage.from_("cupones").get_public_url(nombre_img)
+                        except Exception as img_err:
+                            img_url = ""  # No bloquear el proceso si falla la imagen
+
+                    supabase.table("cupones").insert({
+                        "cuenta": cta_n, "nombre": nom,
+                        "monto": monto, "cta": cta_cuota,
+                        "telefono": tel, "provincia": prov_actual,
+                        "img_path": img_url, "balance_inicial": monto,
+                        "fecha_cobro": f_cobro, "estado": "PENDIENTE",
+                        "visto": 0, "listo": False
+                    }).execute()
+                    detectados += 1
+                    progreso_tareas[tarea_id]["detectados"] = detectados
+
+        progreso_tareas[tarea_id]["estado"] = "listo"
+        return {"ok": True, "detectados": detectados, "paginas": total, "tarea_id": tarea_id}
+    except Exception as e:
+        progreso_tareas[tarea_id]["estado"] = "error"
+        import traceback
+        raise HTTPException(500, str(e) + "\n" + traceback.format_exc()[-800:])
+
+# ── BALANCE ──────────────────────────────────────
+@app.get("/api/balance")
+async def get_balance(provincias: str):
+    provs = provincias.split(",")
+    resultado = []
+    for p in provs:
+        # Clientes únicos
+        res = supabase.table("cupones").select("cuenta,nombre")\
+            .eq("provincia", p.strip()).execute()
+        claves = set()
+        for r in res.data:
+            clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+            claves.add(clave)
+        cant = len(claves)
+
+        # Cobrado
+        res2 = supabase.table("cupones").select("monto")\
+            .eq("provincia", p.strip()).eq("estado", "PAGADO").execute()
+        cobrado = sum(r["monto"] or 0 for r in res2.data)
+
+        # Inicial (1 cuota por cliente pendiente)
+        res3 = supabase.table("cupones").select("cuenta,nombre,monto")\
+            .eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
+        por_cliente = defaultdict(list)
+        for r in res3.data:
+            clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+            por_cliente[clave].append(r["monto"] or 0)
+        inicial = sum(min(v) for v in por_cliente.values())
+
+        resultado.append({
+            "provincia": p.strip(), "cant": cant,
+            "inicial": inicial, "cobrado": cobrado
+        })
+    return resultado
+
+# ── BALANCE DIARIO ────────────────────────────────
+@app.get("/api/balance_diario")
+async def balance_diario():
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    res = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute()
+    pagos = res.data
+
+    clientes = defaultdict(lambda: {
+        "nombre": "", "cuotas": [], "total": 0.0,
+        "medio": "", "comentario": "", "provincia": ""})
+
+    for r in pagos:
+        key = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+        clientes[key]["nombre"]    = r["nombre"] or ""
+        clientes[key]["provincia"] = r["provincia"] or ""
+        clientes[key]["medio"]     = r["medio_pago"] or ""
+        clientes[key]["comentario"]= r["comentario"] or ""
+        clientes[key]["total"]    += r["monto"] or 0
+        if r["cta"]:
+            clientes[key]["cuotas"].append(str(r["cta"]))
+
+    total_general  = sum(c["total"] for c in clientes.values())
+    total_efectivo = sum(c["total"] for c in clientes.values() if "EFECTIVO"  in (c["medio"] or "").upper())
+    total_transfer = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
+    total_mp       = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
+    total_tarjeta  = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
+
+    return {
+        "fecha": datetime.now().strftime("%d/%m/%Y"),
+        "total_clientes": len(clientes),
+        "total_general": total_general,
+        "total_efectivo": total_efectivo,
+        "total_transfer": total_transfer,
+        "total_mp": total_mp,
+        "total_tarjeta": total_tarjeta,
+        "clientes": [
+            {**v, "key": k, "cuotas_str": ", ".join(v["cuotas"]),
+             "multi": len(v["cuotas"]) > 1}
+            for k, v in sorted(clientes.items(),
+                                key=lambda x: (x[1]["provincia"], x[1]["nombre"]))
+        ]
     }
 
-    const d = await r.json();
-    pf.style.width = '100%';
-    pl.textContent = `✅ ${d.detectados} cupones en ${d.paginas} páginas`;
-    cargarTabla();
-    cargarBalance();
-    setTimeout(() => { pw.style.display = 'none'; pf.style.width='0%'; }, 5000);
+# ── INICIAR MES ───────────────────────────────────
+@app.get("/api/iniciar_mes/preview")
+async def iniciar_mes_preview(provincias: str):
+    provs = provincias.split(",")
+    resultado = []
+    for p in provs:
+        res = supabase.table("cupones").select("cuenta,nombre,monto")\
+            .eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
+        claves = set()
+        cupones = len(res.data)
+        por_cliente = defaultdict(list)
+        for r in res.data:
+            clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+            claves.add(clave)
+            por_cliente[clave].append(r["monto"] or 0)
+        monto = sum(min(v) for v in por_cliente.values())
+        resultado.append({
+            "provincia": p.strip(),
+            "clientes": len(claves),
+            "cupones": cupones,
+            "monto": monto
+        })
+    return resultado
 
-  } catch(err) {
-    pl.textContent = '❌ Error al procesar — revisá los logs en Render';
-    console.error(err);
-  }
-  e.target.value = '';
-}
+# INICIAR MES ya no borra nada — solo muestra el balance
+# El borrado se hace desde CIERRE DE MES
 
-// ── BALANCE ───────────────────────────────────────
-async function cargarBalance() {
-  const r = await fetch(`/api/balance?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const data = await r.json();
-  const body = document.getElementById('bal-body');
-  body.innerHTML = '';
-  let totalCobrado = 0;
-  data.forEach(d => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d.provincia.substring(0,6)}</td><td>${d.cant}</td>
-      <td>$${(d.inicial||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</td>
-      <td>$${(d.cobrado||0).toLocaleString('es-AR',{maximumFractionDigits:0})}</td>`;
-    body.appendChild(tr);
-    totalCobrado += d.cobrado || 0;
-  });
-  document.getElementById('lbl-caja').textContent =
-    `CAJA DEL DÍA: $${totalCobrado.toLocaleString('es-AR',{maximumFractionDigits:0})}`;
-}
+# ── CIERRE ────────────────────────────────────────
+@app.get("/api/cierre")
+async def cierre(provincias: str):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    provs = provincias.split(",")
+    resultado = []
+    for p in provs:
+        res_cob = supabase.table("cupones").select("monto")\
+            .eq("provincia", p.strip()).eq("fecha_pago", hoy).execute()
+        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
 
-// ── BALANCE DIARIO ────────────────────────────────
-async function mostrarBalanceDiario() {
-  const r = await fetch('/api/balance_diario');
-  const d = await r.json();
-  if (!d.clientes?.length) { alert('No hay pagos registrados hoy.'); return; }
+        res_pend = supabase.table("cupones").select("cuenta,nombre,monto")\
+            .eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
+        claves_pend = set()
+        monto_pend = 0
+        por_cliente = defaultdict(list)
+        for r in res_pend.data:
+            clave = r["cuenta"] if (r["cuenta"] and r["cuenta"] != "S/D") else r["nombre"]
+            claves_pend.add(clave)
+            por_cliente[clave].append(r["monto"] or 0)
+        monto_pend = sum(min(v) for v in por_cliente.values())
 
-  const sep  = '='.repeat(60);
-  const sep2 = '-'.repeat(60);
-  let txt = `${sep}\n   BALANCE DIARIO — DENTAL WHITE\n   Fecha: ${d.fecha}\n${sep}\n`;
-  txt += `   Clientes cobrados: ${d.total_clientes}\n`;
-  txt += `   Total recaudado:   $${d.total_general.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `${sep2}\n   DESGLOSE POR MÉTODO:\n`;
-  txt += `   💵 Efectivo:       $${d.total_efectivo.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   🏦 Transferencia:  $${d.total_transfer.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   📱 Mercado Pago:   $${d.total_mp.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   💳 Tarjeta:        $${d.total_tarjeta.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `${sep}\n   DETALLE POR CLIENTE:\n${sep2}\n`;
+        resultado.append({
+            "provincia": p.strip(),
+            "cobrado_cant": len(res_cob.data),
+            "cobrado_monto": cobrado,
+            "pendiente_cant": len(claves_pend),
+            "pendiente_monto": monto_pend
+        })
 
-  let provAct = '';
-  d.clientes.forEach(c => {
-    if (c.provincia !== provAct) {
-      provAct = c.provincia;
-      txt += `\n  ── ${provAct.toUpperCase()} ──\n`;
-    }
-    const multi = c.multi ? '  ⭐ MULTI-CUOTA' : '';
-    txt += `  • ${(c.nombre||'').padEnd(35)} Cuota(s): ${c.cuotas_str||'-'}   $${c.total.toLocaleString('es-AR',{maximumFractionDigits:0})}${multi}\n`;
-    if (c.comentario) txt += `    Nota: ${c.comentario}\n`;
-  });
-  txt += `\n${sep}`;
+    # Desglose por método del día
+    res_met = supabase.table("cupones").select("medio_pago,monto")\
+        .eq("fecha_pago", hoy).execute()
+    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
+    for r in res_met.data:
+        m = r["medio_pago"] or "SIN MÉTODO"
+        metodos[m]["cant"]  += 1
+        metodos[m]["monto"] += r["monto"] or 0
 
-  abrirModal('📊 BALANCE DIARIO', txt, [
-    {txt:'Cerrar', color:'#7f8c8d', fn:'cerrarModal()'}
-  ]);
-}
+    return {"provincias": resultado, "metodos": dict(metodos)}
 
-// ── INICIAR MES ───────────────────────────────────
-async function mostrarIniciarMes() {
-  const r = await fetch(`/api/iniciar_mes/preview?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const data = await r.json();
-
-  const sep = '='.repeat(60);
-  let txt = `${sep}\n   BALANCE INICIAL DEL MES — DENTAL WHITE\n${sep}\n`;
-  let totCli=0, totCup=0, totMonto=0;
-  data.forEach(d => {
-    txt += `\n  ── ${d.provincia.toUpperCase()} ──\n`;
-    txt += `     Clientes:    ${d.clientes}\n`;
-    txt += `     Cupones:     ${d.cupones}\n`;
-    txt += `     A recaudar:  $${d.monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    totCli += d.clientes; totCup += d.cupones; totMonto += d.monto;
-  });
-  txt += `\n${'-'.repeat(60)}\n   TOTALES:\n`;
-  txt += `   Clientes:    ${totCli}\n`;
-  txt += `   Cupones:     ${totCup}\n`;
-  txt += `   A recaudar:  $${totMonto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n${sep}`;
-
-  abrirModal('📅 BALANCE INICIO DE MES', txt, [
-    {txt:'Cerrar', color:'#27ae60', fn:'cerrarModal()'}
-  ]);
-}
-
-// ── CIERRE ────────────────────────────────────────
-async function mostrarCierre() {
-  const r = await fetch(`/api/cierre?provincias=${encodeURIComponent(provincias.join(','))}`);
-  const d = await r.json();
-
-  const sep = '='.repeat(60);
-  const hoy = new Date().toLocaleDateString('es-AR');
-  let txt = `${sep}\n   CIERRE DE MES — DENTAL WHITE\n   Fecha: ${hoy}\n${sep}\n`;
-
-  let totCob=0, totPend=0, totCliCob=0, totCliPend=0;
-  d.provincias.forEach(p => {
-    txt += `\n  ── ${p.provincia.toUpperCase()} ──\n`;
-    txt += `     ✅ Cobrado:    ${p.cobrado_cant} cupones   $${p.cobrado_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    txt += `     ⏳ Pendiente:  ${p.pendiente_cant} clientes  $${p.pendiente_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    totCob += p.cobrado_monto; totPend += p.pendiente_monto;
-    totCliCob += p.cobrado_cant; totCliPend += p.pendiente_cant;
-  });
-
-  txt += `\n${'-'.repeat(60)}\n   TOTALES:\n`;
-  txt += `   ✅ Cobrado:   ${totCliCob} cupones   $${totCob.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-  txt += `   ⏳ Pendiente: ${totCliPend} clientes  $${totPend.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-
-  if (Object.keys(d.metodos).length) {
-    txt += `\n${'-'.repeat(60)}\n   DESGLOSE POR MÉTODO:\n`;
-    Object.entries(d.metodos).forEach(([m, v]) => {
-      txt += `   ${m.padEnd(20)} ${v.cant} pagos   $${v.monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    });
-  }
-  txt += `\n${sep}\n\n⚠️  Si confirmás el cierre se borran TODOS los clientes\n   de tus provincias para empezar el mes nuevo.`;
-
-  abrirModal('📝 CIERRE DE MES', txt, [
-    {txt:'❌ Cancelar',         color:'#7f8c8d', fn:'cerrarModal()'},
-    {txt:'✅ Confirmar Cierre', color:'#c0392b', fn:'confirmarCierre()'}
-  ]);
-}
-
-async function confirmarCierre() {
-  cerrarModal();
-  const fd = new FormData();
-  fd.append('provincias', provincias.join(','));
-  await fetch('/api/cierre/confirmar', {method:'POST', body:fd});
-  currId = null;
-  cargarTabla(); cargarBalance();
-  alert('✅ Cierre confirmado. Mes reiniciado correctamente.');
-}
-
-// ── MODAL HELPER ─────────────────────────────────
-function abrirModal(titulo, texto, botones) {
-  document.getElementById('modal-titulo').textContent = titulo;
-  document.getElementById('modal-texto').textContent  = texto;
-  const bd = document.getElementById('modal-btns');
-  bd.innerHTML = '';
-  botones.forEach(b => {
-    const btn = document.createElement('button');
-    btn.textContent = b.txt;
-    btn.style.background = b.color;
-    btn.style.color = 'white';
-    btn.onclick = () => eval(b.fn);
-    bd.appendChild(btn);
-  });
-  document.getElementById('modal-overlay').classList.add('show');
-}
-function cerrarModal() {
-  document.getElementById('modal-overlay').classList.remove('show');
-}
-document.getElementById('modal-overlay').onclick = e => {
-  if (e.target === document.getElementById('modal-overlay')) cerrarModal();
-};
-</script>
-</body>
-</html>
+@app.post("/api/cierre/confirmar")
+async def cierre_confirmar(provincias: str = Form(...)):
+    provs = provincias.split(",")
+    for p in provs:
+        supabase.table("cupones").delete().eq("provincia", p.strip()).execute()
+    return {"ok": True}
