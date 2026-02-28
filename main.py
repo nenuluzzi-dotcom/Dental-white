@@ -389,12 +389,8 @@ async def iniciar_mes_preview(provincias: str):
         })
     return resultado
 
-@app.post("/api/iniciar_mes")
-async def iniciar_mes(provincias: str = Form(...)):
-    provs = provincias.split(",")
-    for p in provs:
-        supabase.table("cupones").delete().eq("provincia", p.strip()).execute()
-    return {"ok": True}
+# INICIAR MES ya no borra nada — solo muestra el balance
+# El borrado se hace desde CIERRE DE MES
 
 # ── CIERRE ────────────────────────────────────────
 @app.get("/api/cierre")
@@ -436,3 +432,10 @@ async def cierre(provincias: str):
         metodos[m]["monto"] += r["monto"] or 0
 
     return {"provincias": resultado, "metodos": dict(metodos)}
+
+@app.post("/api/cierre/confirmar")
+async def cierre_confirmar(provincias: str = Form(...)):
+    provs = provincias.split(",")
+    for p in provs:
+        supabase.table("cupones").delete().eq("provincia", p.strip()).execute()
+    return {"ok": True}
