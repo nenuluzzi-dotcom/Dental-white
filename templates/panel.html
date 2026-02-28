@@ -573,7 +573,7 @@ async function mostrarIniciarMes() {
   const data = await r.json();
 
   const sep = '='.repeat(60);
-  let txt = `${sep}\n   BALANCE DE CIERRE DE MES — DENTAL WHITE\n${sep}\n`;
+  let txt = `${sep}\n   BALANCE INICIAL DEL MES — DENTAL WHITE\n${sep}\n`;
   let totCli=0, totCup=0, totMonto=0;
   data.forEach(d => {
     txt += `\n  ── ${d.provincia.toUpperCase()} ──\n`;
@@ -587,20 +587,9 @@ async function mostrarIniciarMes() {
   txt += `   Cupones:     ${totCup}\n`;
   txt += `   A recaudar:  $${totMonto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n${sep}`;
 
-  abrirModal('📅 INICIAR NUEVO MES', txt, [
-    {txt:'❌ Cancelar',           color:'#7f8c8d', fn:'cerrarModal()'},
-    {txt:'✅ Confirmar y Reiniciar', color:'#c0392b', fn:'confirmarIniciarMes()'}
+  abrirModal('📅 BALANCE INICIO DE MES', txt, [
+    {txt:'Cerrar', color:'#27ae60', fn:'cerrarModal()'}
   ]);
-}
-
-async function confirmarIniciarMes() {
-  cerrarModal();
-  const fd = new FormData();
-  fd.append('provincias', provincias.join(','));
-  await fetch('/api/iniciar_mes', {method:'POST', body:fd});
-  currId = null;
-  cargarTabla(); cargarBalance();
-  alert('✅ Mes reiniciado correctamente');
 }
 
 // ── CIERRE ────────────────────────────────────────
@@ -610,13 +599,13 @@ async function mostrarCierre() {
 
   const sep = '='.repeat(60);
   const hoy = new Date().toLocaleDateString('es-AR');
-  let txt = `${sep}\n   CIERRE DEL DÍA — DENTAL WHITE\n   Fecha: ${hoy}\n${sep}\n`;
+  let txt = `${sep}\n   CIERRE DE MES — DENTAL WHITE\n   Fecha: ${hoy}\n${sep}\n`;
 
   let totCob=0, totPend=0, totCliCob=0, totCliPend=0;
   d.provincias.forEach(p => {
     txt += `\n  ── ${p.provincia.toUpperCase()} ──\n`;
-    txt += `     ✅ Cobrado hoy:  ${p.cobrado_cant} cupones   $${p.cobrado_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
-    txt += `     ⏳ Pendiente:    ${p.pendiente_cant} clientes  $${p.pendiente_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
+    txt += `     ✅ Cobrado:    ${p.cobrado_cant} cupones   $${p.cobrado_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
+    txt += `     ⏳ Pendiente:  ${p.pendiente_cant} clientes  $${p.pendiente_monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
     totCob += p.cobrado_monto; totPend += p.pendiente_monto;
     totCliCob += p.cobrado_cant; totCliPend += p.pendiente_cant;
   });
@@ -631,11 +620,22 @@ async function mostrarCierre() {
       txt += `   ${m.padEnd(20)} ${v.cant} pagos   $${v.monto.toLocaleString('es-AR',{maximumFractionDigits:0})}\n`;
     });
   }
-  txt += `\n${sep}`;
+  txt += `\n${sep}\n\n⚠️  Si confirmás el cierre se borran TODOS los clientes\n   de tus provincias para empezar el mes nuevo.`;
 
-  abrirModal('📝 CIERRE DEL DÍA', txt, [
-    {txt:'Cerrar', color:'#7f8c8d', fn:'cerrarModal()'}
+  abrirModal('📝 CIERRE DE MES', txt, [
+    {txt:'❌ Cancelar',         color:'#7f8c8d', fn:'cerrarModal()'},
+    {txt:'✅ Confirmar Cierre', color:'#c0392b', fn:'confirmarCierre()'}
   ]);
+}
+
+async function confirmarCierre() {
+  cerrarModal();
+  const fd = new FormData();
+  fd.append('provincias', provincias.join(','));
+  await fetch('/api/cierre/confirmar', {method:'POST', body:fd});
+  currId = null;
+  cargarTabla(); cargarBalance();
+  alert('✅ Cierre confirmado. Mes reiniciado correctamente.');
 }
 
 // ── MODAL HELPER ─────────────────────────────────
