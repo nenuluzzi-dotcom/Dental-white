@@ -19,8 +19,7 @@ POPPLER_PATH = os.environ.get("POPPLER_PATH", None)  # None = usar PATH del sist
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
-from fastapi.templating import Jinja2Templates
-
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 PROVINCIAS = {
@@ -120,6 +119,11 @@ async def marcar_impago(cupon_id: int):
         "medio_pago": None,
         "listo": False
     }).eq("id", cupon_id).execute()
+    return {"ok": True}
+
+@app.post("/api/cupon/{cupon_id}/visto")
+async def marcar_visto(cupon_id: int):
+    supabase.table("cupones").update({"visto": 1}).eq("id", cupon_id).execute()
     return {"ok": True}
 
 @app.post("/api/cupon/{cupon_id}/guardar")
