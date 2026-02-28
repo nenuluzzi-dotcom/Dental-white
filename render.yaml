@@ -1,17 +1,11 @@
 services:
   - type: web
     name: dental-white
-    env: python
-    runtime: python3.11
-    buildCommand: "apt-get install -y poppler-utils libgl1 libglib2.0-0 libjpeg-dev zlib1g-dev && pip install -r requirements.txt"
+    runtime: python
+    buildCommand: "apt-get install -y poppler-utils && pip install -r requirements.txt"
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: SUPABASE_URL
         value: https://xejfkrzaofqjzvzjyovh.supabase.co
       - key: SUPABASE_KEY
         sync: false
-```
-
-También creá un archivo nuevo en GitHub llamado `runtime.txt` con este contenido:
-```
-python-3.11.0
