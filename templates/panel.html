@@ -444,6 +444,12 @@ async function subirPDF(event) {
         setTimeout(() => { fill.style.width='0%'; lbl.textContent=''; }, 8000);
         cargarTab(tabActual);
         cargarBalance();
+      } else if (pd.estado === 'imagenes') {
+        const imgOk = pd.img_ok || 0;
+        const imgTot = pd.img_total || pd.detectados;
+        const pct2 = imgTot > 0 ? Math.round((imgOk / imgTot) * 100) : 50;
+        fill.style.width = pct2 + '%';
+        lbl.textContent = `🖼️ Subiendo imagenes ${imgOk}/${imgTot}...`;
       } else if (pd.estado === 'error') {
         lbl.textContent = 'Error al procesar — ver logs de Render';
         fill.style.width = '0%';
