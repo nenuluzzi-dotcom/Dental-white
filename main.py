@@ -2,10 +2,12 @@ import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
+import cv2, numpy as np
+import pypdfium2 as pdfium
 import pdfplumber
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
@@ -25,7 +27,6 @@ PROVINCIAS = {
 
 progreso_tareas = {}
 
-# ── LOGIN ──────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -42,7 +43,6 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
-# ── CUPONES ────────────────────────────────────────────────────────────────────
 @app.get("/api/cupones")
 async def get_cupones(provincia: str, buscar: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
@@ -51,23 +51,24 @@ async def get_cupones(provincia: str, buscar: str = ""):
         .eq("provincia", provincia)
     if buscar:
         q = q.ilike("nombre", f"%{buscar}%")
-    rows = q.order("nombre").execute().data
+    rows = q.order("fecha_cobro").execute().data
 
-    # Contar cuotas pendientes por cliente
     conteo = defaultdict(int)
     for r in rows:
         if r["estado"] == "PENDIENTE":
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             conteo[clave] += 1
+    multi = {k for k, v in conteo.items() if v > 1}
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        r["cuotas_pendientes"] = conteo.get(clave, 0)
+        cp = conteo.get(clave, 0)
+        r["cuotas_pendientes"] = cp
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
-        elif conteo.get(clave, 0) >= 3:
+        elif cp >= 3:
             r["color"] = "rojo"
-        elif conteo.get(clave, 0) == 2:
+        elif cp == 2:
             r["color"] = "naranja"
         else:
             r["color"] = ""
@@ -139,21 +140,20 @@ async def get_imagen(cupon_id: int):
         raise HTTPException(404, "Sin imagen")
     return {"url": res.data[0]["img_path"]}
 
-# ── PROGRESO ───────────────────────────────────────────────────────────────────
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    # Si no existe la tarea -> ya terminó (evita loop infinito)
-    return progreso_tareas.get(tarea_id, {
-        "pagina": 0, "total": 0, "detectados": 0, "saltados": 0,
-        "img_ok": 0, "img_total": 0, "estado": "listo"
-    })
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "img_ok": 0, "img_total": 0, "estado": "listo"})
 
-# ── PDF BACKGROUND ─────────────────────────────────────────────────────────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    import traceback, logging
-    log = logging.getLogger("uvicorn.error")
+    # CRITICO: crear cliente supabase propio en este thread (no compartir el global)
+    # En Python 3.14 el socket HTTP/2 no es thread-safe -> ReadError
+    from supabase import create_client as _cc
+    sb = _cc(SUPABASE_URL, SUPABASE_KEY)
+
     p = progreso_tareas[tarea_id]
     KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+    import traceback, logging
+    log = logging.getLogger("uvicorn.error")
     ids_insertados = []
 
     try:
@@ -164,8 +164,8 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
-                pw, ph = float(pagina.width), float(pagina.height)
 
+                pw, ph = float(pagina.width), float(pagina.height)
                 anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
                 anclas_izq = sorted(
                     [f for f in anclas if f['x0'] < pw / 2],
@@ -178,9 +178,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     y1 = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
 
                     txt_izq = pagina.within_bbox((0, y0, pw/2, y1)).extract_text() or ""
-                    txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
-
-                    # Teléfono
                     tel = "S/D"
                     m_tel = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', txt_izq, re.IGNORECASE)
                     if m_tel:
@@ -190,12 +187,12 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         nums = re.findall(r'\d{10}', txt_izq)
                         if nums: tel = nums[0]
 
-                    # N° cuenta
+                    txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
+
                     cta_n = "S/D"
                     mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
                     if mc: cta_n = mc.group(1)
 
-                    # Nombre afiliado
                     nom = "S/D"
                     if "AFILIADO" in txt_der.upper():
                         try:
@@ -211,7 +208,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                             nom = ' '.join(parts).strip() or "S/D"
                         except: pass
 
-                    # Monto
                     monto = 0.0
                     if "$" in txt_der:
                         try:
@@ -220,30 +216,26 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                             if ml: monto = float(ml)
                         except: pass
 
-                    # Cuota
                     cta_cuota = "S/D"
                     mcu = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
                     if mcu: cta_cuota = mcu.group(1)
 
-                    # Fecha
                     f_cobro = ""
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # ── ANTI-DUPLICADO CORRECTO ──────────────────────────────
-                    # Duplicado = misma cuenta + misma cuota + misma provincia
-                    # Si no hay cuota, duplicado = misma cuenta + provincia
+                    # Anti-duplicados: cuenta + cuota + provincia
+                    # Permite cuota 1 Y cuota 2 del mismo cliente
                     if cta_n != "S/D":
-                        q = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n)\
-                            .eq("provincia", prov)
+                        q_dup = sb.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov)
                         if cta_cuota != "S/D":
-                            q = q.eq("cta", cta_cuota)
-                        if q.execute().data:
+                            q_dup = q_dup.eq("cta", cta_cuota)
+                        if q_dup.execute().data:
                             p["saltados"] += 1
                             continue
 
-                    res_ins = supabase.table("cupones").insert({
+                    # Guardar cupon SIN imagen (rapido, poca memoria)
+                    res_ins = sb.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
                         "cta": cta_cuota, "telefono": tel, "provincia": prov,
                         "img_path": "", "balance_inicial": monto,
@@ -252,40 +244,41 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     }).execute()
                     p["detectados"] += 1
 
+                    # Guardar info para imagen (pagina, bbox)
                     if res_ins.data:
                         ids_insertados.append({
                             "id": res_ins.data[0]["id"],
-                            "idx": idx, "y0": y0, "y1": y1, "pw": pw, "ph": ph
+                            "idx": idx,
+                            "y0": y0, "y1": y1,
+                            "pw": pw, "ph": ph
                         })
 
-        log.info(f"[PDF] Texto OK: {p['detectados']} cupones, {p['saltados']} saltados")
+        p["estado"] = "listo"
+        log.info(f"[PDF] Texto listo: {p['detectados']} cupones, {p['saltados']} saltados")
 
-        # ── SEGUNDA PASADA: subir imagenes con pypdfium2 ──────────────────────
+        # SEGUNDA PASADA: subir imagenes (puede fallar sin problema)
         if ids_insertados:
             p["estado"] = "imagenes"
             p["img_total"] = len(ids_insertados)
             p["img_ok"] = 0
-
             try:
-                import pypdfium2 as pdfium
-                import cv2, numpy as np
-
                 pdf_doc = pdfium.PdfDocument(contenido)
-                pagina_cache = {}
+                pagina_actual = -1
+                img_cv = None
+                hi = wi = 0
+                sy = sx = 1.0
 
                 for item in ids_insertados:
                     try:
-                        idx_p = item["idx"]
-                        if idx_p not in pagina_cache:
-                            pag = pdf_doc[idx_p]
-                            bmp = pag.render(scale=150/72)
-                            img_arr = np.array(bmp.to_pil())
-                            pagina_cache[idx_p] = cv2.cvtColor(img_arr, cv2.COLOR_RGB2BGR)
-
-                        img_cv = pagina_cache[idx_p]
-                        hi, wi = img_cv.shape[:2]
-                        sy = hi / item["ph"]
-                        sx = wi / item["pw"]
+                        if item["idx"] != pagina_actual:
+                            pagina_actual = item["idx"]
+                            pag_pdf = pdf_doc[pagina_actual]
+                            bitmap = pag_pdf.render(scale=100/72)
+                            img_pil = bitmap.to_pil()
+                            img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                            hi, wi = img_cv.shape[:2]
+                            sy = hi / item["ph"]
+                            sx = wi / item["pw"]
 
                         y0i = max(0, int(item["y0"] * sy))
                         y1i = min(hi, int(item["y1"] * sy))
@@ -294,24 +287,25 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
                         if recorte.size > 0:
                             nombre_img = f"{uuid.uuid4().hex}.jpg"
-                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                            supabase.storage.from_("cupones").upload(
+                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            sb.storage.from_("cupones").upload(
                                 path=nombre_img,
                                 file=buf.tobytes(),
                                 file_options={"content-type": "image/jpeg"}
                             )
-                            img_url = supabase.storage.from_("cupones").get_public_url(nombre_img)
-                            supabase.table("cupones").update({"img_path": img_url}).eq("id", item["id"]).execute()
+                            img_url = sb.storage.from_("cupones").get_public_url(nombre_img)
+                            sb.table("cupones").update({"img_path": img_url}).eq("id", item["id"]).execute()
                             p["img_ok"] += 1
                     except Exception as e:
                         log.warning(f"[PDF] Imagen id={item['id']} fallo: {e}")
+                        continue
 
                 pdf_doc.close()
             except Exception as e:
-                log.error(f"[PDF] Error en imagenes: {e}")
+                log.error(f"[PDF] Error en pasada de imagenes: {e}")
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Listo. Imagenes: {p.get('img_ok',0)}/{p.get('img_total',0)}")
+        log.info(f"[PDF] Todo listo. Imagenes: {p.get('img_ok',0)}/{p.get('img_total',0)}")
 
     except Exception as e:
         p["estado"] = "error"
@@ -321,20 +315,15 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
-    progreso_tareas[tarea_id] = {
-        "pagina": 0, "total": 0, "detectados": 0, "saltados": 0,
-        "img_ok": 0, "img_total": 0, "estado": "procesando"
-    }
-    # run_in_executor evita bloquear el event loop de uvicorn
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
+    import asyncio
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
     return {"ok": True, "tarea_id": tarea_id}
 
-# ── BALANCE ────────────────────────────────────────────────────────────────────
 @app.get("/api/balance")
 async def get_balance(provincias: str):
     resultado = []
@@ -351,11 +340,8 @@ async def get_balance(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "cant": len(claves),
-            "inicial": sum(min(v) for v in por_cli.values()),
-            "cobrado": cobrado
-        })
+        inicial = sum(min(v) for v in por_cli.values())
+        resultado.append({"provincia": p, "cant": len(claves), "inicial": inicial, "cobrado": cobrado})
     return resultado
 
 @app.get("/api/balance_diario")
@@ -490,6 +476,86 @@ async def cierre_txt(provincias: str):
     nombre = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
+
+
+@app.post("/api/regenerar_imagenes")
+async def regenerar_imagenes(provincia: str = Form(...), pdf: UploadFile = File(...)):
+    """Regenera imagenes para cupones existentes sin imagen (img_path vacio)"""
+    import asyncio, logging
+    log = logging.getLogger("uvicorn.error")
+    contenido = await pdf.read()
+    prov = provincia.strip().upper()
+
+    # Obtener cupones sin imagen de esta provincia
+    res = supabase.table("cupones").select("id,cuenta,cta,provincia")        .eq("provincia", prov).or_("img_path.eq.,img_path.is.null").execute()
+    sin_img = {(r["cuenta"], r.get("cta")): r["id"] for r in res.data if r.get("cuenta")}
+    log.info(f"[REGEN] {len(sin_img)} cupones sin imagen en {prov}")
+
+    tarea_id = uuid.uuid4().hex
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "img_ok": 0, "img_total": len(sin_img), "estado": "imagenes", "detectados": 0, "saltados": 0}
+
+    def _regen():
+        from supabase import create_client as _cc
+        sb = _cc(SUPABASE_URL, SUPABASE_KEY)
+        log2 = logging.getLogger("uvicorn.error")
+        p2 = progreso_tareas[tarea_id]
+        try:
+            with pdfplumber.open(io.BytesIO(contenido)) as pdf_pl:
+                KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+                ids_para_img = []
+                for idx, pagina in enumerate(pdf_pl.pages):
+                    pw, ph = float(pagina.width), float(pagina.height)
+                    anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
+                    anclas_izq = sorted([f for f in anclas if f['x0'] < pw/2], key=lambda f: f['top'])
+                    for i, f in enumerate(anclas_izq):
+                        y0 = max(0, f['top']-5)
+                        y1 = anclas_izq[i+1]['top']-5 if i+1 < len(anclas_izq) else ph
+                        txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
+                        cta_n = "S/D"
+                        mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
+                        if mc: cta_n = mc.group(1)
+                        cta_cuota = "S/D"
+                        mcu = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
+                        if mcu: cta_cuota = mcu.group(1)
+                        cupon_id = sin_img.get((cta_n, cta_cuota)) or sin_img.get((cta_n, None))
+                        if cupon_id:
+                            ids_para_img.append({"id": cupon_id, "idx": idx, "y0": y0, "y1": y1, "pw": pw, "ph": ph})
+
+            pdf_doc = pdfium.PdfDocument(contenido)
+            cache_pag = {}
+            for item in ids_para_img:
+                try:
+                    if item["idx"] not in cache_pag:
+                        pag_pdf = pdf_doc[item["idx"]]
+                        bmp = pag_pdf.render(scale=150/72)
+                        arr = np.array(bmp.to_pil())
+                        cache_pag[item["idx"]] = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    img_cv = cache_pag[item["idx"]]
+                    hi, wi = img_cv.shape[:2]
+                    sy = hi/item["ph"]; sx = wi/item["pw"]
+                    y0i = max(0, int(item["y0"]*sy))
+                    y1i = min(hi, int(item["y1"]*sy))
+                    x0i = int((item["pw"]/2)*sx)
+                    recorte = img_cv[y0i:y1i, x0i:wi]
+                    if recorte.size > 0:
+                        nombre_img = f"{uuid.uuid4().hex}.jpg"
+                        _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        sb.storage.from_("cupones").upload(nombre_img, buf.tobytes(), {"content-type": "image/jpeg"})
+                        img_url = sb.storage.from_("cupones").get_public_url(nombre_img)
+                        sb.table("cupones").update({"img_path": img_url}).eq("id", item["id"]).execute()
+                        p2["img_ok"] += 1
+                except Exception as e:
+                    log2.warning(f"[REGEN] id={item['id']} fallo: {e}")
+            pdf_doc.close()
+        except Exception as e:
+            log2.error(f"[REGEN] ERROR: {e}")
+        finally:
+            p2["estado"] = "listo"
+            log2.info(f"[REGEN] Listo: {p2['img_ok']}/{p2['img_total']}")
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _regen)
+    return {"ok": True, "tarea_id": tarea_id, "sin_imagen": len(sin_img)}
 @app.post("/api/cierre/confirmar")
 async def cierre_confirmar(provincias: str = Form(...)):
     for p in provincias.split(","):
