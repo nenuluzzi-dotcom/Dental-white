@@ -7,13 +7,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
 import cv2, numpy as np
-from pdf2image import convert_from_bytes
+import pypdfium2 as pdfium
 import pdfplumber
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-POPPLER_PATH = os.environ.get("POPPLER_PATH", None)
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
@@ -162,11 +160,13 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                 if not anclas_izq:
                     continue
 
-                # Convertir solo esta pagina (pagina por pagina, evita colapso de memoria)
-                pk = {"first_page": idx+1, "last_page": idx+1, "dpi": 120}
-                if POPPLER_PATH: pk["poppler_path"] = POPPLER_PATH
-                imgs_pag = convert_from_bytes(contenido, **pk)
-                img_cv = cv2.cvtColor(np.array(imgs_pag[0]), cv2.COLOR_RGB2BGR)
+                # Convertir solo esta pagina con pypdfium2 (rapido, poca memoria)
+                pdf_doc = pdfium.PdfDocument(contenido)
+                pag_pdf = pdf_doc[idx]
+                bitmap = pag_pdf.render(scale=120/72)
+                img_pil = bitmap.to_pil()
+                pdf_doc.close()
+                img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
                 hi, wi = img_cv.shape[:2]
                 sy, sx = hi / ph, wi / pw
 
