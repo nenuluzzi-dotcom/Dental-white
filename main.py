@@ -150,11 +150,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
             total = len(pdf.pages)
             p["total"] = total
 
-            # Convertir todas las páginas de una vez (más rápido que página por página)
-            pdf_kw = {"dpi": 150}
-            if POPPLER_PATH:
-                pdf_kw["poppler_path"] = POPPLER_PATH
-            todas_imgs = convert_from_bytes(contenido, **pdf_kw)
 
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
@@ -167,7 +162,11 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                 if not anclas_izq:
                     continue
 
-                img_cv = cv2.cvtColor(np.array(todas_imgs[idx]), cv2.COLOR_RGB2BGR)
+                # Convertir solo esta pagina (pagina por pagina, evita colapso de memoria)
+                pk = {"first_page": idx+1, "last_page": idx+1, "dpi": 120}
+                if POPPLER_PATH: pk["poppler_path"] = POPPLER_PATH
+                imgs_pag = convert_from_bytes(contenido, **pk)
+                img_cv = cv2.cvtColor(np.array(imgs_pag[0]), cv2.COLOR_RGB2BGR)
                 hi, wi = img_cv.shape[:2]
                 sy, sx = hi / ph, wi / pw
 
