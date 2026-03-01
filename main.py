@@ -162,20 +162,38 @@ def _subir_jpg(sb, jpg_bytes: bytes) -> str:
 
 def _procesar_imagenes(sb, contenido_pdf: bytes, items: list, progreso: dict):
     """
-    Renderiza cada página UNA SOLA VEZ (caché por índice de página),
-    recorta la mitad derecha del cupón y sube a Supabase Storage.
+    Renderiza cada página UNA SOLA VEZ (caché), recorta y sube a Storage.
+    Cada paso está protegido individualmente — una página corrupta no detiene el proceso.
     """
-    pdf_doc = pdfium.PdfDocument(contenido_pdf)
+    pdf_doc = None
     cache: dict[int, Image.Image] = {}
 
-    for item in items:
-        try:
-            idx = item["idx"]
-            if idx not in cache:
-                pag = pdf_doc[idx]
-                bitmap = pag.render(scale=120/72)   # 120 DPI - rápido y legible
-                cache[idx] = bitmap.to_pil().convert("RGB")
+    try:
+        pdf_doc = pdfium.PdfDocument(contenido_pdf)
+    except Exception as e:
+        log.error(f"[IMG] No se pudo abrir PDF con pypdfium2: {e}")
+        return
 
+    for item in items:
+        idx = item["idx"]
+        cupon_id = item.get("id", "?")
+
+        # Paso 1: renderizar página (con su propio try)
+        if idx not in cache:
+            try:
+                pag = pdf_doc[idx]
+                bitmap = pag.render(scale=120/72)
+                cache[idx] = bitmap.to_pil().convert("RGB")
+                log.info(f"[IMG] Página {idx} renderizada OK")
+            except Exception as e:
+                log.warning(f"[IMG] Página {idx} falló al renderizar: {e} — saltando cupón {cupon_id}")
+                cache[idx] = None  # marcar como fallida para no reintentar
+
+        if cache.get(idx) is None:
+            continue
+
+        # Paso 2: recortar
+        try:
             img = cache[idx]
             wi, hi = img.size
             sx = wi / item["pw"]
@@ -184,20 +202,27 @@ def _procesar_imagenes(sb, contenido_pdf: bytes, items: list, progreso: dict):
             y0 = max(0, int(item["y0"] * sy))
             y1 = min(hi, int(item["y1"] * sy))
             recorte = img.crop((x0, y0, wi, y1))
-
             if recorte.width < 10 or recorte.height < 10:
+                log.warning(f"[IMG] Recorte vacío en id={cupon_id}, saltando")
                 continue
-
             buf = io.BytesIO()
             recorte.save(buf, format="JPEG", quality=82)
-            url = _subir_jpg(sb, buf.getvalue())
-            sb.table("cupones").update({"img_path": url}).eq("id", item["id"]).execute()
-            progreso["img_ok"] = progreso.get("img_ok", 0) + 1
-
+            jpg = buf.getvalue()
         except Exception as e:
-            log.warning(f"[IMG] id={item.get('id')} fallo: {e}")
+            log.warning(f"[IMG] Error recortando id={cupon_id}: {e}")
+            continue
 
-    pdf_doc.close()
+        # Paso 3: subir a Storage
+        try:
+            url = _subir_jpg(sb, jpg)
+            sb.table("cupones").update({"img_path": url}).eq("id", cupon_id).execute()
+            progreso["img_ok"] = progreso.get("img_ok", 0) + 1
+        except Exception as e:
+            log.warning(f"[IMG] Error subiendo id={cupon_id}: {e}")
+
+    try:
+        pdf_doc.close()
+    except: pass
     cache.clear()
 
 # ── PDF PROCESSING ─────────────────────────────────────────────────────────────
