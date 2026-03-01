@@ -2,11 +2,12 @@ import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
 import pdfplumber
+import pypdfium2 as pdfium
 from PIL import Image
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
@@ -43,57 +44,63 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
-# ── HELPERS IMAGEN ──────────────────────────────────────
-def _extraer_recorte_png(pdf_bytes: bytes, page_idx: int, y0_pt: float, y1_pt: float, pw_pt: float, ph_pt: float) -> bytes | None:
-    """Renderiza la pagina con pdfplumber/Pillow a 150 DPI y recorta la mitad derecha del cupon."""
+# ── IMAGEN: recortar y subir a Storage ─────────────────
+def _recortar_y_subir(pdf_bytes: bytes, page_idx: int,
+                       y0_pt: float, y1_pt: float,
+                       pw_pt: float, ph_pt: float) -> str:
+    """
+    Renderiza la pagina con pypdfium2 (sin poppler, sin deps extra),
+    recorta la mitad derecha del cupon y sube a Supabase Storage.
+    Retorna la URL publica o "" si falla.
+    """
+    import logging
+    log = logging.getLogger("uvicorn.error")
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            pagina = pdf.pages[page_idx]
-            # Renderizar a imagen PIL a 150 DPI
-            img = pagina.to_image(resolution=150).original  # PIL Image
-            iw, ih = img.size
-            sx = iw / pw_pt
-            sy = ih / ph_pt
-            # Recortar mitad derecha, franja vertical del cupon
-            x0i = int((pw_pt / 2) * sx)
-            y0i = max(0, int(y0_pt * sy))
-            y1i = min(ih, int(y1_pt * sy))
-            recorte = img.crop((x0i, y0i, iw, y1i))
-            buf = io.BytesIO()
-            recorte.save(buf, format="JPEG", quality=85)
-            return buf.getvalue()
-    except Exception as e:
-        import logging
-        logging.getLogger("uvicorn.error").warning(f"[IMG] recorte fallo pag={page_idx}: {e}")
-        return None
+        doc  = pdfium.PdfDocument(pdf_bytes)
+        page = doc[page_idx]
+        # Escala: 150 DPI = 150/72 ≈ 2.08
+        SCALE = 150 / 72
+        bm   = page.render(scale=SCALE)
+        img  = bm.to_pil()          # PIL Image RGB
+        doc.close()
 
-def _subir_imagen_storage(datos: bytes, nombre: str) -> str:
-    """Sube JPEG a Supabase Storage bucket=cupones y retorna URL publica permanente."""
-    try:
+        iw, ih = img.size
+        sx = iw / pw_pt
+        sy = ih / ph_pt
+
+        x0 = int((pw_pt / 2) * sx)
+        y0 = max(0, int(y0_pt * sy))
+        y1 = min(ih, int(y1_pt * sy))
+
+        recorte = img.crop((x0, y0, iw, y1))
+        if recorte.width < 10 or recorte.height < 10:
+            return ""
+
+        buf = io.BytesIO()
+        recorte.save(buf, format="JPEG", quality=85)
+        datos = buf.getvalue()
+
+        nombre = f"imagenes/{uuid.uuid4().hex}.jpg"
         supabase.storage.from_("cupones").upload(
-            path=f"imagenes/{nombre}",
+            path=nombre,
             file=datos,
             file_options={"content-type": "image/jpeg"}
         )
-        return supabase.storage.from_("cupones").get_public_url(f"imagenes/{nombre}")
+        return supabase.storage.from_("cupones").get_public_url(nombre)
+
     except Exception as e:
-        import logging
-        logging.getLogger("uvicorn.error").warning(f"[IMG] upload fallo {nombre}: {e}")
+        log.warning(f"[IMG] fallo pag={page_idx}: {e}")
         return ""
 
-def _borrar_imagen_storage(img_path: str):
-    """Borra imagen del bucket si existe."""
+def _borrar_img(img_path: str):
     if not img_path or not img_path.startswith("http"):
         return
     try:
-        # Extraer nombre del archivo de la URL publica
-        # URL tiene formato: .../storage/v1/object/public/cupones/imagenes/xxx.jpg
         if "/imagenes/" in img_path:
             nombre = "imagenes/" + img_path.split("/imagenes/")[-1].split("?")[0]
             supabase.storage.from_("cupones").remove([nombre])
-    except Exception as e:
-        import logging
-        logging.getLogger("uvicorn.error").warning(f"[IMG] borrar fallo {img_path}: {e}")
+    except:
+        pass
 
 # ── CUPONES ─────────────────────────────────────────────
 @app.get("/api/cupones")
@@ -111,11 +118,10 @@ async def get_cupones(provincia: str, buscar: str = ""):
         if r["estado"] == "PENDIENTE":
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             conteo[clave] += 1
-    multi = {k for k, v in conteo.items() if v > 1}
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        cant = conteo.get(clave, 0)
+        cant  = conteo.get(clave, 0)
         r["cuotas_pendientes"] = cant
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
@@ -166,10 +172,9 @@ async def guardar_cupon(cupon_id: int, cuenta: str = Form(""), nombre: str = For
 
 @app.delete("/api/cupon/{cupon_id}")
 async def eliminar_cupon(cupon_id: int):
-    # Borrar imagen del storage antes de eliminar el registro
     res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
     if res.data and res.data[0].get("img_path"):
-        _borrar_imagen_storage(res.data[0]["img_path"])
+        _borrar_img(res.data[0]["img_path"])
     supabase.table("cupones").delete().eq("id", cupon_id).execute()
     return {"ok": True}
 
@@ -184,25 +189,28 @@ async def agregar_manual(provincia: str = Form(...)):
 # ── PROGRESO ────────────────────────────────────────────
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
+    return progreso_tareas.get(tarea_id, {
+        "pagina": 0, "total": 0, "detectados": 0,
+        "saltados": 0, "estado": "procesando",
+        "img_ok": 0, "img_total": 0
+    })
 
-# ── OCR + IMAGEN EN DOS PASADAS ─────────────────────────
+# ── PROCESAMIENTO PDF ───────────────────────────────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
     import logging, traceback
     log = logging.getLogger("uvicorn.error")
-    p = progreso_tareas[tarea_id]
-    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+    p   = progreso_tareas[tarea_id]
+    KW  = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
 
-    # Lista de cupones insertados con su info de pagina para segunda pasada de imagenes
-    insertados = []  # [{id, page_idx, y0, y1, pw, ph}, ...]
+    insertados = []  # [{id, page_idx, y0, y1, pw, ph}]
 
     try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
-            log.info(f"[PDF] {total} paginas, provincia={prov}")
+            log.info(f"[PDF] {total} pags, prov={prov}")
 
-            # ── PASADA 1: extraer texto e insertar cupones (rapido) ──
+            # ── PASADA 1: texto rapido ──────────────────
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
 
@@ -237,9 +245,9 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     nom = "S/D"
                     if "AFILIADO" in txt_der.upper():
                         try:
-                            parte = txt_der.upper().split("AFILIADO")[1]
+                            parte  = txt_der.upper().split("AFILIADO")[1]
                             lineas = [l.strip() for l in parte.split('\n') if l.strip()]
-                            parts = []
+                            parts  = []
                             for linea in lineas[:2]:
                                 limpia = re.sub(r'[^A-Z\s]', '', linea).strip()
                                 if limpia and not any(k in limpia for k in KW):
@@ -292,49 +300,53 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         })
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Texto listo: {p['detectados']} cupones, {p['saltados']} saltados")
+        log.info(f"[PDF] Texto OK: {p['detectados']} cupones, {p['saltados']} saltados")
 
-        # ── PASADA 2: extraer y subir imagenes a Storage ──
+        # ── PASADA 2: imagenes con pypdfium2 ───────────
         if insertados:
-            p["estado"] = "imagenes"
+            p["estado"]    = "imagenes"
             p["img_total"] = len(insertados)
-            p["img_ok"] = 0
-            pagina_cache = {}  # cache: page_idx -> PIL Image
+            p["img_ok"]    = 0
 
             for item in insertados:
                 try:
-                    img_bytes = _extraer_recorte_png(
-                        contenido, item["page_idx"],
-                        item["y0"], item["y1"], item["pw"], item["ph"]
+                    url = _recortar_y_subir(
+                        contenido,
+                        item["page_idx"],
+                        item["y0"], item["y1"],
+                        item["pw"], item["ph"]
                     )
-                    if img_bytes:
-                        nombre_img = f"{uuid.uuid4().hex}.jpg"
-                        url = _subir_imagen_storage(img_bytes, nombre_img)
-                        if url:
-                            supabase.table("cupones").update({"img_path": url})\
-                                .eq("id", item["id"]).execute()
-                            p["img_ok"] += 1
+                    if url:
+                        supabase.table("cupones").update({"img_path": url})\
+                            .eq("id", item["id"]).execute()
+                        p["img_ok"] += 1
                 except Exception as e:
-                    log.warning(f"[IMG] id={item['id']} fallo: {e}")
-                    continue
+                    log.warning(f"[IMG] id={item['id']}: {e}")
 
-            log.info(f"[IMG] {p['img_ok']}/{p['img_total']} imagenes subidas")
+            log.info(f"[IMG] {p['img_ok']}/{p['img_total']} subidas")
 
         p["estado"] = "listo"
 
     except Exception as e:
         p["estado"] = "error"
-        p["error"] = str(e)
-        log.error(f"[PDF] ERROR: {traceback.format_exc()}")
+        p["error"]  = str(e)
+        log.error(f"[PDF] ERROR FATAL: {traceback.format_exc()}")
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
     contenido = await archivo.read()
-    tarea_id = uuid.uuid4().hex
-    prov = provincia.strip().upper()
-    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
-    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
-    t.start()
+    tarea_id  = uuid.uuid4().hex
+    prov      = provincia.strip().upper()
+    progreso_tareas[tarea_id] = {
+        "pagina": 0, "total": 0, "detectados": 0,
+        "saltados": 0, "estado": "procesando",
+        "img_ok": 0, "img_total": 0
+    }
+    threading.Thread(
+        target=procesar_pdf_background,
+        args=(contenido, prov, tarea_id),
+        daemon=True
+    ).start()
     return {"ok": True, "tarea_id": tarea_id}
 
 # ── BALANCE ─────────────────────────────────────────────
@@ -344,7 +356,7 @@ async def get_balance(provincias: str):
     for p in provincias.split(","):
         p = p.strip()
         res_all = supabase.table("cupones").select("cuenta,nombre").eq("provincia", p).execute()
-        claves = set()
+        claves  = set()
         for r in res_all.data:
             claves.add(r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"])
         res_pag = supabase.table("cupones").select("monto").eq("provincia", p).eq("estado", "PAGADO").execute()
@@ -354,13 +366,15 @@ async def get_balance(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({"provincia": p, "cant": len(claves),
-                           "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado})
+        resultado.append({
+            "provincia": p, "cant": len(claves),
+            "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado
+        })
     return resultado
 
 @app.get("/api/balance_diario")
 async def balance_diario():
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy   = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
     clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
@@ -376,15 +390,17 @@ async def balance_diario():
     ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
-    return {"fecha": datetime.now().strftime("%d/%m/%Y"),
-            "total_clientes": len(clientes), "total_general": tg,
-            "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
-            "clientes": [{**v,"key":k,"cuotas_str":", ".join(v["cuotas"]),"multi":len(v["cuotas"])>1}
-                         for k,v in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"]))]}
+    return {
+        "fecha": datetime.now().strftime("%d/%m/%Y"),
+        "total_clientes": len(clientes), "total_general": tg,
+        "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
+        "clientes": [{**v,"key":k,"cuotas_str":", ".join(v["cuotas"]),"multi":len(v["cuotas"])>1}
+                     for k,v in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"]))]
+    }
 
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt():
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy   = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
     clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
@@ -433,8 +449,11 @@ async def cierre(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
+        resultado.append({
+            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cli),
+            "pendiente_monto": sum(min(v) for v in por_cli.values())
+        })
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
@@ -455,8 +474,11 @@ async def cierre_txt(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
+        resultado.append({
+            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cli),
+            "pendiente_monto": sum(min(v) for v in por_cli.values())
+        })
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
@@ -471,7 +493,8 @@ async def cierre_txt(provincias: str):
                    f"  Pendiente:  {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
         tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
     lineas += ["","="*50,"  RESUMEN GENERAL","-"*50,
-               f"  Total cobrado:   $ {tc:>10,.0f}",f"  Total pendiente: $ {tp:>10,.0f}","","  POR METODO:"]
+               f"  Total cobrado:   $ {tc:>10,.0f}",
+               f"  Total pendiente: $ {tp:>10,.0f}","","  POR METODO:"]
     for m,v in metodos.items():
         lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
     lineas.append("="*50)
@@ -480,20 +503,17 @@ async def cierre_txt(provincias: str):
 
 @app.post("/api/cierre/confirmar")
 async def cierre_confirmar(provincias: str = Form(...)):
-    """Borra cupones Y sus imagenes del storage."""
     import logging
     log = logging.getLogger("uvicorn.error")
     for p in provincias.split(","):
         p = p.strip()
-        # Recolectar todas las img_path antes de borrar
         res = supabase.table("cupones").select("img_path").eq("provincia", p).execute()
         for r in res.data:
-            if r.get("img_path") and r["img_path"].startswith("http"):
-                try:
-                    _borrar_imagen_storage(r["img_path"])
-                except Exception as e:
-                    log.warning(f"[CIERRE] imagen no borrada: {e}")
+            if r.get("img_path"):
+                try: _borrar_img(r["img_path"])
+                except: pass
         supabase.table("cupones").delete().eq("provincia", p).execute()
+        log.info(f"[CIERRE] {p} borrado con imagenes")
     return {"ok": True}
 
 @app.get("/api/iniciar_mes/preview")
@@ -506,6 +526,9 @@ async def iniciar_mes_preview(provincias: str):
         for r in res.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({"provincia": p, "clientes": len(por_cli),
-                           "cupones": len(res.data), "monto": sum(min(v) for v in por_cli.values())})
+        resultado.append({
+            "provincia": p, "clientes": len(por_cli),
+            "cupones": len(res.data),
+            "monto": sum(min(v) for v in por_cli.values())
+        })
     return resultado
