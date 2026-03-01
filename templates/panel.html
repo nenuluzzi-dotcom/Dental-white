@@ -205,6 +205,8 @@ input:checked+.sl::before{transform:translateX(18px)}
     <button class="btn-side bs-gris" onclick="verCierre()">📝 CIERRE</button>
     <button class="btn-side bs-naranja" onclick="verBalance()">📊 BALANCE DIARIO</button>
     <button class="btn-side bs-rojo" onclick="eliminar()">❌ ELIMINAR CUPÓN</button>
+    <input type="file" id="inp-regen" accept=".pdf" style="display:none" onchange="regenImagenes(event)">
+    <button class="btn-side" style="background:#7b2d8b;color:#fff" onclick="clickRegen()">🖼️ REGENERAR IMÁGENES</button>
   </div>
   <div class="leyenda">
     <span><span class="dot dv"></span>Listo/Pagado</span>
@@ -689,6 +691,45 @@ async function verBalance(){
 
 // ── DESCARGA TXT ──────────────────────────────────────────────────────────────
 function dlBalance(){ const a=document.createElement('a'); a.href='/api/balance_diario/txt'; a.click(); }
+
+// ── REGENERAR IMÁGENES ────────────────────────────────────────────────────────
+function clickRegen(){
+  if(tabActual==='✅ PAGOS HOY') return alert('Seleccioná una provincia primero');
+  if(!confirm('¿Regenerar imágenes faltantes en '+tabActual+'? Necesitás subir el PDF de esa provincia.')) return;
+  document.getElementById('inp-regen').click();
+}
+async function regenImagenes(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  event.target.value='';
+  const fill=document.getElementById('prog-fill');
+  const lbl=document.getElementById('prog-lbl');
+  fill.style.width='5%'; lbl.textContent='Buscando cupones sin imagen...';
+  const fd=new FormData();
+  fd.append('provincia',tabActual);
+  fd.append('pdf',file);
+  let res;
+  try{ res=await fetch('/api/regenerar_imagenes',{method:'POST',body:fd}); }
+  catch(e){ fill.style.width='0%'; lbl.textContent='❌ Error de conexión'; return; }
+  if(!res.ok){ fill.style.width='0%'; lbl.textContent='❌ Error al enviar'; return; }
+  const {tarea_id, sin_imagen} = await res.json();
+  lbl.textContent='🖼️ Regenerando '+sin_imagen+' imágenes...';
+  const iv=setInterval(async()=>{
+    try{
+      const pd=await(await fetch('/api/progreso/'+tarea_id)).json();
+      if(pd.estado==='listo'||pd.estado==='error'){
+        clearInterval(iv);
+        fill.style.width='100%';
+        lbl.textContent='✅ '+pd.img_ok+'/'+pd.img_total+' imágenes regeneradas';
+        setTimeout(()=>{fill.style.width='0%';lbl.textContent='';},6000);
+      } else {
+        const pct=pd.img_total>0?Math.round((pd.img_ok/pd.img_total)*95):10;
+        fill.style.width=pct+'%';
+        lbl.textContent='🖼️ '+(pd.img_ok||0)+'/'+(pd.img_total||0)+' imágenes';
+      }
+    }catch(e){}
+  },800);
+}
 function dlCierre(){  const a=document.createElement('a'); a.href='/api/cierre/txt?provincias='+encodeURIComponent(provincias.join(',')); a.click(); }
 </script>
 </body>
