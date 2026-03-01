@@ -150,9 +150,18 @@ async def get_progreso(tarea_id: str):
 
 # ── SUBIR PDF ─────────────────────────────────────
 def procesar_pdf_background(contenido, prov_actual, tarea_id):
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    log.info(f"[PDF] Iniciando procesamiento tarea {tarea_id}, provincia {prov_actual}, bytes={len(contenido)}")
     detectados = 0
     saltados = 0
     try:
+        # Convertir todas las páginas de una sola vez (mucho más rápido)
+        pdf_kwargs = {"dpi": 150}
+        if POPPLER_PATH:
+            pdf_kwargs["poppler_path"] = POPPLER_PATH
+        todas_imgs = convert_from_bytes(contenido, **pdf_kwargs)
+
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             progreso_tareas[tarea_id]["total"] = total
@@ -165,11 +174,7 @@ def procesar_pdf_background(contenido, prov_actual, tarea_id):
                 if not anclas_izq:
                     continue
 
-                pdf_kwargs = {"first_page": idx+1, "last_page": idx+1, "dpi": 200}
-                if POPPLER_PATH:
-                    pdf_kwargs["poppler_path"] = POPPLER_PATH
-                imgs = convert_from_bytes(contenido, **pdf_kwargs)
-                img_pil = imgs[0]
+                img_pil = todas_imgs[idx]
                 img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
                 hi, wi = img_cv.shape[:2]
                 escala_y = hi / ph
