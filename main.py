@@ -2,11 +2,12 @@ import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
 import pdfplumber
+import httpx
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
@@ -25,6 +26,9 @@ PROVINCIAS = {
 
 progreso_tareas = {}
 
+# PDFs en memoria: tarea_id -> bytes (para proxy sin CORS)
+pdfs_memoria = {}
+
 # ── LOGIN ──────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
@@ -41,6 +45,24 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
 @app.get("/panel", response_class=HTMLResponse)
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
+
+# ── PROXY PDF (evita CORS de Supabase Storage) ─────────
+@app.get("/api/pdf/{nombre_pdf}")
+async def proxy_pdf(nombre_pdf: str):
+    """Sirve el PDF desde memoria — PDF.js lo puede leer sin CORS"""
+    contenido = pdfs_memoria.get(nombre_pdf)
+    if not contenido:
+        # intentar desde Supabase Storage como fallback
+        try:
+            url = supabase.storage.from_("cupones").get_public_url(f"pdfs/{nombre_pdf}")
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(url)
+                contenido = r.content
+        except:
+            raise HTTPException(404, "PDF no encontrado")
+    return Response(content=contenido, media_type="application/pdf",
+                    headers={"Access-Control-Allow-Origin": "*",
+                             "Cache-Control": "public, max-age=3600"})
 
 # ── CUPONES ────────────────────────────────────────────
 @app.get("/api/cupones")
@@ -141,29 +163,21 @@ async def get_imagen(cupon_id: int):
 async def get_progreso(tarea_id: str):
     return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
 
-# ── OCR BACKGROUND: solo texto, sin imagenes ───────────
+# ── OCR BACKGROUND ─────────────────────────────────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
     import logging, traceback
     log = logging.getLogger("uvicorn.error")
     p = progreso_tareas[tarea_id]
     KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
 
-    try:
-        # 1. Subir el PDF completo a Storage UNA SOLA VEZ
-        pdf_nombre = f"pdfs/{uuid.uuid4().hex}.pdf"
-        try:
-            supabase.storage.from_("cupones").upload(
-                path=pdf_nombre,
-                file=contenido,
-                file_options={"content-type": "application/pdf"}
-            )
-            pdf_url = supabase.storage.from_("cupones").get_public_url(pdf_nombre)
-            log.info(f"[PDF] PDF subido: {pdf_url}")
-        except Exception as e:
-            log.error(f"[PDF] No se pudo subir PDF a storage: {e}")
-            pdf_url = ""
+    # Nombre unico para este PDF
+    pdf_nombre = f"{tarea_id}.pdf"
+    # Guardar en memoria para proxy
+    pdfs_memoria[pdf_nombre] = contenido
+    # URL local (proxy sin CORS)
+    pdf_url_local = f"/api/pdf/{pdf_nombre}"
 
-        # 2. Extraer texto pagina por pagina (rapido, sin conversion de imagen)
+    try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
@@ -231,21 +245,25 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicados
+                    # ── ANTI-DUPLICADO CORRECTO ──────────────────────────
+                    # Solo salta si existe EXACTAMENTE el mismo afiliado + misma cuota
+                    # Permite importar cuota 2, cuota 3 del mismo cliente
                     if cta_n != "S/D":
-                        existe = supabase.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov).execute()
+                        q = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n)\
+                            .eq("provincia", prov)
+                        if cta_cuota != "S/D":
+                            q = q.eq("cta", cta_cuota)
+                        existe = q.execute()
                         if existe.data:
                             p["saltados"] += 1
                             continue
 
-                    # img_path guarda referencia al PDF + pagina + bbox (para PDF.js)
-                    # formato: PDFPAGE|url|page_idx|y0_ratio|y1_ratio
-                    if pdf_url:
-                        y0r = round(y0 / ph, 4)
-                        y1r = round(y1 / ph, 4)
-                        img_ref = f"PDFPAGE|{pdf_url}|{idx}|{y0r}|{y1r}"
-                    else:
-                        img_ref = ""
+                    # Referencia al PDF local para PDF.js
+                    # Formato: PDFPAGE|url|page_idx|y0_ratio|y1_ratio
+                    y0r = round(y0 / ph, 4)
+                    y1r = round(y1 / ph, 4)
+                    img_ref = f"PDFPAGE|{pdf_url_local}|{idx}|{y0r}|{y1r}"
 
                     supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
@@ -257,7 +275,18 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     p["detectados"] += 1
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Listo: {p['detectados']} cupones insertados")
+        log.info(f"[PDF] Listo: {p['detectados']} detectados, {p['saltados']} saltados")
+
+        # Subir PDF a Storage en background (no bloquea, opcional)
+        try:
+            supabase.storage.from_("cupones").upload(
+                path=f"pdfs/{pdf_nombre}",
+                file=contenido,
+                file_options={"content-type": "application/pdf"}
+            )
+            log.info(f"[PDF] Subido a Storage OK")
+        except Exception as e:
+            log.warning(f"[PDF] Storage upload fallo (no critico): {e}")
 
     except Exception as e:
         p["estado"] = "error"
@@ -291,14 +320,15 @@ async def get_balance(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({"provincia": p, "cant": len(claves), "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado})
+        resultado.append({"provincia": p, "cant": len(claves),
+                           "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado})
     return resultado
 
 @app.get("/api/balance_diario")
 async def balance_diario():
     hoy = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
-    clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
+    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
@@ -312,19 +342,17 @@ async def balance_diario():
     ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
-    return {
-        "fecha": datetime.now().strftime("%d/%m/%Y"),
-        "total_clientes": len(clientes), "total_general": tg,
-        "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
-        "clientes": [{**v, "key": k, "cuotas_str": ", ".join(v["cuotas"]), "multi": len(v["cuotas"]) > 1}
-                     for k, v in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"]))]
-    }
+    return {"fecha": datetime.now().strftime("%d/%m/%Y"),
+            "total_clientes": len(clientes), "total_general": tg,
+            "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
+            "clientes": [{**v,"key":k,"cuotas_str":", ".join(v["cuotas"]),"multi":len(v["cuotas"])>1}
+                         for k,v in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"]))]}
 
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt():
     hoy = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
-    clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
+    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
@@ -339,17 +367,17 @@ async def balance_diario_txt():
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50, "     DENTAL WHITE - BALANCE DIARIO", f"     {fecha_fmt}", "="*50, ""]
+    lineas = ["="*50,"     DENTAL WHITE - BALANCE DIARIO",f"     {fecha_fmt}","="*50,""]
     prov_act = ""
-    for k, c in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"])):
+    for k,c in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"])):
         if c["provincia"] != prov_act:
             prov_act = c["provincia"]
-            lineas += ["", f"  [ {prov_act} ]", "-"*50]
+            lineas += ["",f"  [ {prov_act} ]","-"*50]
         cuotas = f"  (cta/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
         medio  = f"  [{c['medio']}]" if c["medio"] else ""
         nota   = f"  - {c['comentario']}" if c["comentario"] else ""
         lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio}{cuotas}{nota}")
-    lineas += ["", "="*50, f"  CLIENTES: {len(clientes)}", f"  TOTAL:    $ {tg:>10,.0f}", "-"*50]
+    lineas += ["","="*50,f"  CLIENTES: {len(clientes)}",f"  TOTAL:    $ {tg:>10,.0f}","-"*50]
     if tef: lineas.append(f"  Efectivo:       $ {tef:>10,.0f}")
     if ttr: lineas.append(f"  Transferencia:  $ {ttr:>10,.0f}")
     if tmp: lineas.append(f"  Mercado Pago:   $ {tmp:>10,.0f}")
@@ -371,10 +399,8 @@ async def cierre(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
@@ -395,25 +421,23 @@ async def cierre_txt(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
         metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50, "     DENTAL WHITE - CIERRE DEL DIA", f"     {fecha_fmt}", "="*50]
+    lineas = ["="*50,"     DENTAL WHITE - CIERRE DEL DIA",f"     {fecha_fmt}","="*50]
     tc, tp = 0, 0
     for r in resultado:
-        lineas += ["", f"  PROVINCIA: {r['provincia']}", "-"*50,
+        lineas += ["",f"  PROVINCIA: {r['provincia']}","-"*50,
                    f"  Cobrado:    {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
                    f"  Pendiente:  {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
         tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
-    lineas += ["", "="*50, "  RESUMEN GENERAL", "-"*50,
-               f"  Total cobrado:   $ {tc:>10,.0f}", f"  Total pendiente: $ {tp:>10,.0f}", "", "  POR METODO:"]
+    lineas += ["","="*50,"  RESUMEN GENERAL","-"*50,
+               f"  Total cobrado:   $ {tc:>10,.0f}",f"  Total pendiente: $ {tp:>10,.0f}","","  POR METODO:"]
     for m, v in metodos.items():
         lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
     lineas.append("="*50)
@@ -436,8 +460,6 @@ async def iniciar_mes_preview(provincias: str):
         for r in res.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "clientes": len(por_cli),
-            "cupones": len(res.data), "monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "clientes": len(por_cli),
+                           "cupones": len(res.data), "monto": sum(min(v) for v in por_cli.values())})
     return resultado
