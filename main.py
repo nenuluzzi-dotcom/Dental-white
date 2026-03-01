@@ -10,7 +10,6 @@ import cv2, numpy as np
 from pdf2image import convert_from_bytes
 import pdfplumber
 
-# ── CONFIGURACIÓN ─────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 POPPLER_PATH = os.environ.get("POPPLER_PATH", None)
@@ -28,7 +27,8 @@ PROVINCIAS = {
     "ADMINISTRADORA": ["BUENOS AIRES", "CORRIENTES", "SANTIAGO DEL ESTERO", "POSADAS", "SANTA FE"]
 }
 
-# ── RUTAS PRINCIPALES ─────────────────────────────
+progreso_tareas = {}
+
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -38,14 +38,13 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
     if clave.lower() != "union":
         raise HTTPException(status_code=401, detail="Clave incorrecta")
     if usuario not in PROVINCIAS:
-        raise HTTPException(status_code=401, detail="Usuario inválido")
+        raise HTTPException(status_code=401, detail="Usuario invalido")
     return {"ok": True, "usuario": usuario, "provincias": PROVINCIAS[usuario]}
 
 @app.get("/panel", response_class=HTMLResponse)
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
-# ── CUPONES ───────────────────────────────────────
 @app.get("/api/cupones")
 async def get_cupones(provincia: str, buscar: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
@@ -54,21 +53,20 @@ async def get_cupones(provincia: str, buscar: str = ""):
         .eq("provincia", provincia)
     if buscar:
         q = q.ilike("nombre", f"%{buscar}%")
-    res = q.order("fecha_cobro").execute()
-    rows = res.data
+    rows = q.order("fecha_cobro").execute().data
 
     conteo = defaultdict(int)
     for r in rows:
         if r["estado"] == "PENDIENTE":
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             conteo[clave] += 1
-    cuentas_multi = {k for k, v in conteo.items() if v > 1}
+    multi = {k for k, v in conteo.items() if v > 1}
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
-        elif clave in cuentas_multi:
+        elif clave in multi:
             r["color"] = "naranja"
         else:
             r["color"] = ""
@@ -77,8 +75,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
 @app.get("/api/cupones/hoy")
 async def get_pagos_hoy():
     hoy = datetime.now().strftime("%Y-%m-%d")
-    res = supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre").execute()
-    return res.data
+    return supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre").execute().data
 
 @app.get("/api/cupon/{cupon_id}")
 async def get_cupon(cupon_id: int):
@@ -141,50 +138,44 @@ async def get_imagen(cupon_id: int):
         raise HTTPException(404, "Sin imagen")
     return {"url": res.data[0]["img_path"]}
 
-# ── PROGRESO OCR ──────────────────────────────────
-progreso_tareas = {}
-
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "estado": "procesando"})
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
 
-# ── SUBIR PDF ─────────────────────────────────────
-def procesar_pdf_background(contenido, prov_actual, tarea_id):
-    import logging
-    log = logging.getLogger("uvicorn.error")
-    log.info(f"[PDF] Iniciando procesamiento tarea {tarea_id}, provincia {prov_actual}, bytes={len(contenido)}")
-    detectados = 0
-    saltados = 0
+def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
+    p = progreso_tareas[tarea_id]
+    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
     try:
-        # Convertir todas las páginas de una sola vez (mucho más rápido)
-        pdf_kwargs = {"dpi": 150}
-        if POPPLER_PATH:
-            pdf_kwargs["poppler_path"] = POPPLER_PATH
-        todas_imgs = convert_from_bytes(contenido, **pdf_kwargs)
-
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
-            progreso_tareas[tarea_id]["total"] = total
+            p["total"] = total
+
+            # Convertir todas las páginas de una vez (más rápido que página por página)
+            pdf_kw = {"dpi": 150}
+            if POPPLER_PATH:
+                pdf_kw["poppler_path"] = POPPLER_PATH
+            todas_imgs = convert_from_bytes(contenido, **pdf_kw)
 
             for idx, pagina in enumerate(pdf.pages):
-                progreso_tareas[tarea_id]["pagina"] = idx + 1
+                p["pagina"] = idx + 1
+
                 pw, ph = float(pagina.width), float(pagina.height)
                 anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
-                anclas_izq = sorted([f for f in anclas if f['x0'] < pw / 2], key=lambda f: f['top'])
+                anclas_izq = sorted(
+                    [f for f in anclas if f['x0'] < pw / 2],
+                    key=lambda f: f['top'])
                 if not anclas_izq:
                     continue
 
-                img_pil = todas_imgs[idx]
-                img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                img_cv = cv2.cvtColor(np.array(todas_imgs[idx]), cv2.COLOR_RGB2BGR)
                 hi, wi = img_cv.shape[:2]
-                escala_y = hi / ph
-                escala_x = wi / pw
+                sy, sx = hi / ph, wi / pw
 
                 for i, f in enumerate(anclas_izq):
-                    y0_pdf = max(0, f['top'] - 5)
-                    y1_pdf = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
+                    y0 = max(0, f['top'] - 5)
+                    y1 = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
 
-                    txt_izq = pagina.within_bbox((0, y0_pdf, pw/2, y1_pdf)).extract_text() or ""
+                    txt_izq = pagina.within_bbox((0, y0, pw/2, y1)).extract_text() or ""
                     tel = "S/D"
                     m_tel = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', txt_izq, re.IGNORECASE)
                     if m_tel:
@@ -194,13 +185,13 @@ def procesar_pdf_background(contenido, prov_actual, tarea_id):
                         nums = re.findall(r'\d{10}', txt_izq)
                         if nums: tel = nums[0]
 
-                    txt_der = pagina.within_bbox((pw/2, y0_pdf, pw, y1_pdf)).extract_text() or ""
+                    txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
+
                     cta_n = "S/D"
-                    m_cta = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
-                    if m_cta: cta_n = m_cta.group(1)
+                    mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
+                    if mc: cta_n = mc.group(1)
 
                     nom = "S/D"
-                    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
                     if "AFILIADO" in txt_der.upper():
                         try:
                             parte = txt_der.upper().split("AFILIADO")[1]
@@ -224,28 +215,26 @@ def procesar_pdf_background(contenido, prov_actual, tarea_id):
                         except: pass
 
                     cta_cuota = "S/D"
-                    mc = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
-                    if mc: cta_cuota = mc.group(1)
+                    mcu = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
+                    if mcu: cta_cuota = mcu.group(1)
 
                     f_cobro = ""
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # ── ANTI-DUPLICADOS: verificar si ya existe cuenta+mes ──
+                    # Anti-duplicados
                     if cta_n != "S/D":
-                        existente = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n)\
-                            .eq("provincia", prov_actual)\
-                            .execute()
-                        if existente.data and len(existente.data) > 0:
-                            saltados += 1
-                            progreso_tareas[tarea_id]["saltados"] = saltados
+                        existe = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n).eq("provincia", prov).execute()
+                        if existe.data:
+                            p["saltados"] += 1
                             continue
 
-                    y0_img = int(y0_pdf * escala_y)
-                    y1_img = int(y1_pdf * escala_y)
-                    x0_img = int((pw/2) * escala_x)
-                    recorte = img_cv[y0_img:y1_img, x0_img:wi]
+                    # Recortar mitad derecha del cupón
+                    y0i = max(0, int(y0 * sy))
+                    y1i = min(hi, int(y1 * sy))
+                    x0i = int((pw / 2) * sx)
+                    recorte = img_cv[y0i:y1i, x0i:wi]
 
                     img_url = ""
                     if recorte.size > 0:
@@ -258,243 +247,185 @@ def procesar_pdf_background(contenido, prov_actual, tarea_id):
                                 file_options={"content-type": "image/jpeg"}
                             )
                             img_url = supabase.storage.from_("cupones").get_public_url(nombre_img)
-                        except Exception:
+                        except Exception as e:
+                            p["ultimo_error_img"] = str(e)
                             img_url = ""
 
                     supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
-                        "cta": cta_cuota, "telefono": tel, "provincia": prov_actual,
+                        "cta": cta_cuota, "telefono": tel, "provincia": prov,
                         "img_path": img_url, "balance_inicial": monto,
-                        "fecha_cobro": f_cobro, "estado": "PENDIENTE", "visto": 0, "listo": False
+                        "fecha_cobro": f_cobro, "estado": "PENDIENTE",
+                        "visto": 0, "listo": False
                     }).execute()
-                    detectados += 1
-                    progreso_tareas[tarea_id]["detectados"] = detectados
+                    p["detectados"] += 1
 
-        progreso_tareas[tarea_id]["estado"] = "listo"
+        p["estado"] = "listo"
     except Exception as e:
-        progreso_tareas[tarea_id]["estado"] = "error"
-        import traceback
-        progreso_tareas[tarea_id]["error"] = str(e)
+        p["estado"] = "error"
+        p["error"] = str(e)
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
-    prov_actual = provincia.strip().upper()
+    prov = provincia.strip().upper()
     progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, procesar_pdf_background, contenido, prov_actual, tarea_id)
+    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
+    t.start()
     return {"ok": True, "tarea_id": tarea_id}
 
-# ── BALANCE ──────────────────────────────────────
 @app.get("/api/balance")
 async def get_balance(provincias: str):
-    provs = provincias.split(",")
     resultado = []
-    for p in provs:
-        res = supabase.table("cupones").select("cuenta,nombre").eq("provincia", p.strip()).execute()
+    for p in provincias.split(","):
+        p = p.strip()
+        res_all = supabase.table("cupones").select("cuenta,nombre").eq("provincia", p).execute()
         claves = set()
-        for r in res.data:
+        for r in res_all.data:
             claves.add(r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"])
-
-        res2 = supabase.table("cupones").select("monto").eq("provincia", p.strip()).eq("estado", "PAGADO").execute()
-        cobrado = sum(r["monto"] or 0 for r in res2.data)
-
-        res3 = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
-        por_cliente = defaultdict(list)
-        for r in res3.data:
+        res_pag = supabase.table("cupones").select("monto").eq("provincia", p).eq("estado", "PAGADO").execute()
+        cobrado = sum(r["monto"] or 0 for r in res_pag.data)
+        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
+        por_cli = defaultdict(list)
+        for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cliente[clave].append(r["monto"] or 0)
-        inicial = sum(min(v) for v in por_cliente.values())
-
-        resultado.append({"provincia": p.strip(), "cant": len(claves), "inicial": inicial, "cobrado": cobrado})
+            por_cli[clave].append(r["monto"] or 0)
+        inicial = sum(min(v) for v in por_cli.values())
+        resultado.append({"provincia": p, "cant": len(claves), "inicial": inicial, "cobrado": cobrado})
     return resultado
 
-# ── BALANCE DIARIO ────────────────────────────────
 @app.get("/api/balance_diario")
 async def balance_diario():
     hoy = datetime.now().strftime("%Y-%m-%d")
-    res = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute()
+    pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
     clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
-    for r in res.data:
+    for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        clientes[key]["nombre"] = r["nombre"] or ""
-        clientes[key]["provincia"] = r["provincia"] or ""
-        clientes[key]["medio"] = r["medio_pago"] or ""
+        clientes[key]["nombre"]     = r["nombre"] or ""
+        clientes[key]["provincia"]  = r["provincia"] or ""
+        clientes[key]["medio"]      = r["medio_pago"] or ""
         clientes[key]["comentario"] = r["comentario"] or ""
-        clientes[key]["total"] += r["monto"] or 0
+        clientes[key]["total"]     += r["monto"] or 0
         if r["cta"]: clientes[key]["cuotas"].append(str(r["cta"]))
-
-    total_general  = sum(c["total"] for c in clientes.values())
-    total_efectivo = sum(c["total"] for c in clientes.values() if "EFECTIVO" in (c["medio"] or "").upper())
-    total_transfer = sum(c["total"] for c in clientes.values() if "TRANSFER" in (c["medio"] or "").upper())
-    total_mp       = sum(c["total"] for c in clientes.values() if "MERCADO"  in (c["medio"] or "").upper())
-    total_tarjeta  = sum(c["total"] for c in clientes.values() if "TARJETA"  in (c["medio"] or "").upper())
-
+    tg  = sum(c["total"] for c in clientes.values())
+    tef = sum(c["total"] for c in clientes.values() if "EFECTIVO"  in (c["medio"] or "").upper())
+    ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
+    tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
+    tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     return {
         "fecha": datetime.now().strftime("%d/%m/%Y"),
-        "total_clientes": len(clientes), "total_general": total_general,
-        "total_efectivo": total_efectivo, "total_transfer": total_transfer,
-        "total_mp": total_mp, "total_tarjeta": total_tarjeta,
+        "total_clientes": len(clientes), "total_general": tg,
+        "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
         "clientes": [{**v, "key": k, "cuotas_str": ", ".join(v["cuotas"]), "multi": len(v["cuotas"]) > 1}
                      for k, v in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"]))]
     }
 
-# ── EXPORTAR BALANCE COMO TXT ─────────────────────
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt():
     hoy = datetime.now().strftime("%Y-%m-%d")
-    res = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute()
+    pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
     clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
-    for r in res.data:
+    for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        clientes[key]["nombre"] = r["nombre"] or ""
-        clientes[key]["provincia"] = r["provincia"] or ""
-        clientes[key]["medio"] = r["medio_pago"] or ""
+        clientes[key]["nombre"]     = r["nombre"] or ""
+        clientes[key]["provincia"]  = r["provincia"] or ""
+        clientes[key]["medio"]      = r["medio_pago"] or ""
         clientes[key]["comentario"] = r["comentario"] or ""
-        clientes[key]["total"] += r["monto"] or 0
+        clientes[key]["total"]     += r["monto"] or 0
         if r["cta"]: clientes[key]["cuotas"].append(str(r["cta"]))
-
-    total_general  = sum(c["total"] for c in clientes.values())
-    total_efectivo = sum(c["total"] for c in clientes.values() if "EFECTIVO" in (c["medio"] or "").upper())
-    total_transfer = sum(c["total"] for c in clientes.values() if "TRANSFER" in (c["medio"] or "").upper())
-    total_mp       = sum(c["total"] for c in clientes.values() if "MERCADO"  in (c["medio"] or "").upper())
-    total_tarjeta  = sum(c["total"] for c in clientes.values() if "TARJETA"  in (c["medio"] or "").upper())
-
+    tg  = sum(c["total"] for c in clientes.values())
+    tef = sum(c["total"] for c in clientes.values() if "EFECTIVO"  in (c["medio"] or "").upper())
+    ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
+    tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
+    tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = []
-    lineas.append("=" * 50)
-    lineas.append("         DENTAL WHITE - BALANCE DIARIO")
-    lineas.append(f"         {fecha_fmt}")
-    lineas.append("=" * 50)
-    lineas.append("")
-
-    prov_actual = ""
+    lineas = ["=" * 50, "     DENTAL WHITE - BALANCE DIARIO", f"     {fecha_fmt}", "=" * 50, ""]
+    prov_act = ""
     for k, c in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"])):
-        if c["provincia"] != prov_actual:
-            prov_actual = c["provincia"]
-            lineas.append("")
-            lineas.append(f"  [ {prov_actual} ]")
-            lineas.append("-" * 50)
-        cuotas_str = f"  (cuota/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
-        medio_str = f"  [{c['medio']}]" if c["medio"] else ""
-        comentario_str = f"  - {c['comentario']}" if c["comentario"] else ""
-        lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio_str}{cuotas_str}{comentario_str}")
-
-    lineas.append("")
+        if c["provincia"] != prov_act:
+            prov_act = c["provincia"]
+            lineas += ["", f"  [ {prov_act} ]", "-" * 50]
+        cuotas = f"  (cta/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
+        medio  = f"  [{c['medio']}]" if c["medio"] else ""
+        nota   = f"  - {c['comentario']}" if c["comentario"] else ""
+        lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio}{cuotas}{nota}")
+    lineas += ["", "=" * 50, f"  CLIENTES: {len(clientes)}", f"  TOTAL:    $ {tg:>10,.0f}", "-" * 50]
+    if tef: lineas.append(f"  Efectivo:       $ {tef:>10,.0f}")
+    if ttr: lineas.append(f"  Transferencia:  $ {ttr:>10,.0f}")
+    if tmp: lineas.append(f"  Mercado Pago:   $ {tmp:>10,.0f}")
+    if tta: lineas.append(f"  Tarjeta:        $ {tta:>10,.0f}")
     lineas.append("=" * 50)
-    lineas.append(f"  TOTAL CLIENTES: {len(clientes)}")
-    lineas.append(f"  TOTAL GENERAL:  $ {total_general:>10,.0f}")
-    lineas.append("-" * 50)
-    if total_efectivo:  lineas.append(f"  Efectivo:       $ {total_efectivo:>10,.0f}")
-    if total_transfer:  lineas.append(f"  Transferencia:  $ {total_transfer:>10,.0f}")
-    if total_mp:        lineas.append(f"  Mercado Pago:   $ {total_mp:>10,.0f}")
-    if total_tarjeta:   lineas.append(f"  Tarjeta:        $ {total_tarjeta:>10,.0f}")
-    lineas.append("=" * 50)
+    nombre = f"balance_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
-    contenido_txt = "\n".join(lineas)
-    nombre_archivo = f"balance_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-
-    return PlainTextResponse(
-        content=contenido_txt,
-        headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
-    )
-
-# ── EXPORTAR CIERRE COMO TXT ──────────────────────
-@app.get("/api/cierre/txt")
-async def cierre_txt(provincias: str):
-    hoy = datetime.now().strftime("%Y-%m-%d")
-    provs = provincias.split(",")
-    resultado = []
-    for p in provs:
-        res_cob = supabase.table("cupones").select("cuenta,nombre,monto,medio_pago").eq("provincia", p.strip()).eq("fecha_pago", hoy).execute()
-        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
-        res_pend = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
-        por_cliente = defaultdict(list)
-        for r in res_pend.data:
-            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cliente[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p.strip(),
-            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cliente),
-            "pendiente_monto": sum(min(v) for v in por_cliente.values()),
-            "detalle_cobrado": res_cob.data
-        })
-
-    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
-    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
-    for r in res_met.data:
-        m = r["medio_pago"] or "SIN MÉTODO"
-        metodos[m]["cant"] += 1
-        metodos[m]["monto"] += r["monto"] or 0
-
-    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = []
-    lineas.append("=" * 50)
-    lineas.append("         DENTAL WHITE - CIERRE DEL DIA")
-    lineas.append(f"         {fecha_fmt}")
-    lineas.append("=" * 50)
-
-    total_cobrado_gral = 0
-    total_pendiente_gral = 0
-    for r in resultado:
-        lineas.append("")
-        lineas.append(f"  PROVINCIA: {r['provincia']}")
-        lineas.append("-" * 50)
-        lineas.append(f"  Cobrado hoy:  {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}")
-        lineas.append(f"  Pendiente:    {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}")
-        total_cobrado_gral += r["cobrado_monto"]
-        total_pendiente_gral += r["pendiente_monto"]
-
-    lineas.append("")
-    lineas.append("=" * 50)
-    lineas.append("  RESUMEN GENERAL")
-    lineas.append("-" * 50)
-    lineas.append(f"  Total cobrado:   $ {total_cobrado_gral:>10,.0f}")
-    lineas.append(f"  Total pendiente: $ {total_pendiente_gral:>10,.0f}")
-    lineas.append("")
-    lineas.append("  POR METODO DE PAGO:")
-    for m, v in metodos.items():
-        lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
-    lineas.append("=" * 50)
-
-    contenido_txt = "\n".join(lineas)
-    nombre_archivo = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-
-    return PlainTextResponse(
-        content=contenido_txt,
-        headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
-    )
-
-# ── CIERRE ────────────────────────────────────────
 @app.get("/api/cierre")
 async def cierre(provincias: str):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    provs = provincias.split(",")
     resultado = []
-    for p in provs:
-        res_cob = supabase.table("cupones").select("monto").eq("provincia", p.strip()).eq("fecha_pago", hoy).execute()
+    for p in provincias.split(","):
+        p = p.strip()
+        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
         cobrado = sum(r["monto"] or 0 for r in res_cob.data)
-        res_pend = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
-        por_cliente = defaultdict(list)
-        for r in res_pend.data:
+        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
+        por_cli = defaultdict(list)
+        for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cliente[clave].append(r["monto"] or 0)
+            por_cli[clave].append(r["monto"] or 0)
         resultado.append({
-            "provincia": p.strip(),
+            "provincia": p,
             "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cliente),
-            "pendiente_monto": sum(min(v) for v in por_cliente.values())
+            "pendiente_cant": len(por_cli),
+            "pendiente_monto": sum(min(v) for v in por_cli.values())
         })
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
-        m = r["medio_pago"] or "SIN MÉTODO"
-        metodos[m]["cant"] += 1
+        m = r["medio_pago"] or "SIN METODO"
+        metodos[m]["cant"]  += 1
         metodos[m]["monto"] += r["monto"] or 0
     return {"provincias": resultado, "metodos": dict(metodos)}
+
+@app.get("/api/cierre/txt")
+async def cierre_txt(provincias: str):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    resultado = []
+    for p in provincias.split(","):
+        p = p.strip()
+        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
+        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
+        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
+        por_cli = defaultdict(list)
+        for r in res_pen.data:
+            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+            por_cli[clave].append(r["monto"] or 0)
+        resultado.append({
+            "provincia": p,
+            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cli),
+            "pendiente_monto": sum(min(v) for v in por_cli.values())
+        })
+    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
+    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
+    for r in res_met.data:
+        m = r["medio_pago"] or "SIN METODO"
+        metodos[m]["cant"]  += 1
+        metodos[m]["monto"] += r["monto"] or 0
+    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
+    lineas = ["=" * 50, "     DENTAL WHITE - CIERRE DEL DIA", f"     {fecha_fmt}", "=" * 50]
+    tc, tp = 0, 0
+    for r in resultado:
+        lineas += ["", f"  PROVINCIA: {r['provincia']}", "-" * 50,
+                   f"  Cobrado hoy:  {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
+                   f"  Pendiente:    {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
+        tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
+    lineas += ["", "=" * 50, "  RESUMEN GENERAL", "-" * 50,
+               f"  Total cobrado:   $ {tc:>10,.0f}", f"  Total pendiente: $ {tp:>10,.0f}", "", "  POR METODO:"]
+    for m, v in metodos.items():
+        lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
+    lineas.append("=" * 50)
+    nombre = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
 @app.post("/api/cierre/confirmar")
 async def cierre_confirmar(provincias: str = Form(...)):
@@ -504,16 +435,17 @@ async def cierre_confirmar(provincias: str = Form(...)):
 
 @app.get("/api/iniciar_mes/preview")
 async def iniciar_mes_preview(provincias: str):
-    provs = provincias.split(",")
     resultado = []
-    for p in provs:
-        res = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
-        por_cliente = defaultdict(list)
+    for p in provincias.split(","):
+        p = p.strip()
+        res = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
+        por_cli = defaultdict(list)
         for r in res.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cliente[clave].append(r["monto"] or 0)
+            por_cli[clave].append(r["monto"] or 0)
         resultado.append({
-            "provincia": p.strip(), "clientes": len(por_cliente),
-            "cupones": len(res.data), "monto": sum(min(v) for v in por_cliente.values())
+            "provincia": p, "clientes": len(por_cli),
+            "cupones": len(res.data),
+            "monto": sum(min(v) for v in por_cli.values())
         })
     return resultado
