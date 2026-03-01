@@ -1,4 +1,4 @@
-import os, re, uuid, io
+import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -149,15 +149,9 @@ async def get_progreso(tarea_id: str):
     return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "estado": "procesando"})
 
 # ── SUBIR PDF ─────────────────────────────────────
-@app.post("/api/subir_pdf")
-async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    contenido = await archivo.read()
+def procesar_pdf_background(contenido, prov_actual, tarea_id):
     detectados = 0
     saltados = 0
-    prov_actual = provincia.strip().upper()
-    tarea_id = uuid.uuid4().hex
-    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
-
     try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
@@ -272,7 +266,6 @@ async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...))
                     progreso_tareas[tarea_id]["detectados"] = detectados
 
         progreso_tareas[tarea_id]["estado"] = "listo"
-        return {"ok": True, "detectados": detectados, "saltados": saltados, "paginas": total, "tarea_id": tarea_id}
     except Exception as e:
         progreso_tareas[tarea_id]["estado"] = "error"
         import traceback
