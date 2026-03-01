@@ -1,13 +1,12 @@
-import os, re, uuid, io, logging
+import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
 import pdfplumber
-import pypdfium2 as pdfium
 from PIL import Image
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
@@ -26,9 +25,8 @@ PROVINCIAS = {
 }
 
 progreso_tareas = {}
-log = logging.getLogger("uvicorn.error")
 
-# ── AUTH ───────────────────────────────────────────────────────────────────────
+# ── LOGIN ───────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -45,32 +43,83 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
-# ── CUPONES ────────────────────────────────────────────────────────────────────
+# ── HELPERS IMAGEN ──────────────────────────────────────
+def _extraer_recorte_png(pdf_bytes: bytes, page_idx: int, y0_pt: float, y1_pt: float, pw_pt: float, ph_pt: float) -> bytes | None:
+    """Renderiza la pagina con pdfplumber/Pillow a 150 DPI y recorta la mitad derecha del cupon."""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            pagina = pdf.pages[page_idx]
+            # Renderizar a imagen PIL a 150 DPI
+            img = pagina.to_image(resolution=150).original  # PIL Image
+            iw, ih = img.size
+            sx = iw / pw_pt
+            sy = ih / ph_pt
+            # Recortar mitad derecha, franja vertical del cupon
+            x0i = int((pw_pt / 2) * sx)
+            y0i = max(0, int(y0_pt * sy))
+            y1i = min(ih, int(y1_pt * sy))
+            recorte = img.crop((x0i, y0i, iw, y1i))
+            buf = io.BytesIO()
+            recorte.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning(f"[IMG] recorte fallo pag={page_idx}: {e}")
+        return None
+
+def _subir_imagen_storage(datos: bytes, nombre: str) -> str:
+    """Sube JPEG a Supabase Storage bucket=cupones y retorna URL publica permanente."""
+    try:
+        supabase.storage.from_("cupones").upload(
+            path=f"imagenes/{nombre}",
+            file=datos,
+            file_options={"content-type": "image/jpeg"}
+        )
+        return supabase.storage.from_("cupones").get_public_url(f"imagenes/{nombre}")
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning(f"[IMG] upload fallo {nombre}: {e}")
+        return ""
+
+def _borrar_imagen_storage(img_path: str):
+    """Borra imagen del bucket si existe."""
+    if not img_path or not img_path.startswith("http"):
+        return
+    try:
+        # Extraer nombre del archivo de la URL publica
+        # URL tiene formato: .../storage/v1/object/public/cupones/imagenes/xxx.jpg
+        if "/imagenes/" in img_path:
+            nombre = "imagenes/" + img_path.split("/imagenes/")[-1].split("?")[0]
+            supabase.storage.from_("cupones").remove([nombre])
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning(f"[IMG] borrar fallo {img_path}: {e}")
+
+# ── CUPONES ─────────────────────────────────────────────
 @app.get("/api/cupones")
 async def get_cupones(provincia: str, buscar: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    q = supabase.table("cupones").select("*") \
-        .or_(f"estado.eq.PENDIENTE,fecha_pago.eq.{hoy}") \
+    q = supabase.table("cupones").select("*")\
+        .or_(f"estado.eq.PENDIENTE,fecha_pago.eq.{hoy}")\
         .eq("provincia", provincia)
     if buscar:
         q = q.ilike("nombre", f"%{buscar}%")
-    rows = q.order("nombre").execute().data
+    rows = q.order("fecha_cobro").execute().data
 
     conteo = defaultdict(int)
     for r in rows:
         if r["estado"] == "PENDIENTE":
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             conteo[clave] += 1
+    multi = {k for k, v in conteo.items() if v > 1}
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        cp = conteo.get(clave, 0)
-        r["cuotas_pendientes"] = cp
+        cant = conteo.get(clave, 0)
+        r["cuotas_pendientes"] = cant
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
-        elif cp >= 3:
-            r["color"] = "rojo"
-        elif cp == 2:
+        elif cant > 1:
             r["color"] = "naranja"
         else:
             r["color"] = ""
@@ -97,13 +146,6 @@ async def registrar_pago(cupon_id: int, medio_pago: str = Form(...), comentario:
     }).eq("id", cupon_id).execute()
     return {"ok": True}
 
-@app.post("/api/cupon/{cupon_id}/impago")
-async def marcar_impago(cupon_id: int):
-    supabase.table("cupones").update({
-        "estado": "PENDIENTE", "fecha_pago": None, "medio_pago": None, "listo": False
-    }).eq("id", cupon_id).execute()
-    return {"ok": True}
-
 @app.post("/api/cupon/{cupon_id}/visto")
 async def marcar_visto(cupon_id: int):
     supabase.table("cupones").update({"visto": 1}).eq("id", cupon_id).execute()
@@ -111,9 +153,9 @@ async def marcar_visto(cupon_id: int):
 
 @app.post("/api/cupon/{cupon_id}/guardar")
 async def guardar_cupon(cupon_id: int, cuenta: str = Form(""), nombre: str = Form(""),
-                        monto: str = Form(""), cta: str = Form(""),
-                        fecha_cobro: str = Form(""), telefono: str = Form(""),
-                        comentario: str = Form("")):
+                         monto: str = Form(""), cta: str = Form(""),
+                         fecha_cobro: str = Form(""), telefono: str = Form(""),
+                         comentario: str = Form("")):
     supabase.table("cupones").update({
         "cuenta": cuenta, "nombre": nombre,
         "monto": float(monto) if monto else 0,
@@ -124,7 +166,10 @@ async def guardar_cupon(cupon_id: int, cuenta: str = Form(""), nombre: str = For
 
 @app.delete("/api/cupon/{cupon_id}")
 async def eliminar_cupon(cupon_id: int):
-    # Solo borra la fila. Imagen queda en Storage hasta el cierre de mes.
+    # Borrar imagen del storage antes de eliminar el registro
+    res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
+    if res.data and res.data[0].get("img_path"):
+        _borrar_imagen_storage(res.data[0]["img_path"])
     supabase.table("cupones").delete().eq("id", cupon_id).execute()
     return {"ok": True}
 
@@ -136,291 +181,163 @@ async def agregar_manual(provincia: str = Form(...)):
     }).execute()
     return {"ok": True}
 
-@app.get("/api/cupon/{cupon_id}/imagen")
-async def get_imagen(cupon_id: int):
-    res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
-    if not res.data or not res.data[0].get("img_path"):
-        raise HTTPException(404, "Sin imagen")
-    return {"url": res.data[0]["img_path"]}
-
+# ── PROGRESO ────────────────────────────────────────────
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    return progreso_tareas.get(tarea_id, {
-        "pagina": 0, "total": 0, "detectados": 0, "saltados": 0,
-        "img_ok": 0, "img_total": 0, "estado": "listo"
-    })
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
 
-# ── IMAGEN HELPERS ─────────────────────────────────────────────────────────────
-def _subir_jpg(sb, jpg_bytes: bytes) -> str:
-    """Sube JPG a Supabase Storage, retorna URL pública permanente."""
-    path = f"img/{uuid.uuid4().hex}.jpg"
-    sb.storage.from_("cupones").upload(
-        path=path, file=jpg_bytes,
-        file_options={"content-type": "image/jpeg"}
-    )
-    return sb.storage.from_("cupones").get_public_url(path)
-
-def _procesar_imagenes(sb, contenido_pdf: bytes, items: list, progreso: dict):
-    """
-    Renderiza cada página UNA SOLA VEZ (caché), recorta y sube a Storage.
-    Cada paso está protegido individualmente — una página corrupta no detiene el proceso.
-    """
-    pdf_doc = None
-    cache: dict[int, Image.Image] = {}
-
-    try:
-        pdf_doc = pdfium.PdfDocument(contenido_pdf)
-    except Exception as e:
-        log.error(f"[IMG] No se pudo abrir PDF con pypdfium2: {e}")
-        return
-
-    for item in items:
-        idx = item["idx"]
-        cupon_id = item.get("id", "?")
-
-        # Paso 1: renderizar página (con su propio try)
-        if idx not in cache:
-            try:
-                pag = pdf_doc[idx]
-                bitmap = pag.render(scale=120/72)
-                cache[idx] = bitmap.to_pil().convert("RGB")
-                log.info(f"[IMG] Página {idx} renderizada OK")
-            except Exception as e:
-                log.warning(f"[IMG] Página {idx} falló al renderizar: {e} — saltando cupón {cupon_id}")
-                cache[idx] = None  # marcar como fallida para no reintentar
-
-        if cache.get(idx) is None:
-            continue
-
-        # Paso 2: recortar
-        try:
-            img = cache[idx]
-            wi, hi = img.size
-            sx = wi / item["pw"]
-            sy = hi / item["ph"]
-            x0 = int((item["pw"] / 2) * sx)
-            y0 = max(0, int(item["y0"] * sy))
-            y1 = min(hi, int(item["y1"] * sy))
-            recorte = img.crop((x0, y0, wi, y1))
-            if recorte.width < 10 or recorte.height < 10:
-                log.warning(f"[IMG] Recorte vacío en id={cupon_id}, saltando")
-                continue
-            buf = io.BytesIO()
-            recorte.save(buf, format="JPEG", quality=82)
-            jpg = buf.getvalue()
-        except Exception as e:
-            log.warning(f"[IMG] Error recortando id={cupon_id}: {e}")
-            continue
-
-        # Paso 3: subir a Storage
-        try:
-            url = _subir_jpg(sb, jpg)
-            sb.table("cupones").update({"img_path": url}).eq("id", cupon_id).execute()
-            progreso["img_ok"] = progreso.get("img_ok", 0) + 1
-        except Exception as e:
-            log.warning(f"[IMG] Error subiendo id={cupon_id}: {e}")
-
-    try:
-        pdf_doc.close()
-    except: pass
-    cache.clear()
-
-# ── PDF PROCESSING ─────────────────────────────────────────────────────────────
+# ── OCR + IMAGEN EN DOS PASADAS ─────────────────────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    import traceback
-    # Cliente propio: el global no es thread-safe en Python 3.14 (HTTP/2)
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+    import logging, traceback
+    log = logging.getLogger("uvicorn.error")
     p = progreso_tareas[tarea_id]
-    KW = ['DIRECCION', 'PROVINCIA', 'COBRO', 'PLAN', 'MONTO', 'CTA', 'TALON', 'RECUERDE']
-    items_img = []
+    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+
+    # Lista de cupones insertados con su info de pagina para segunda pasada de imagenes
+    insertados = []  # [{id, page_idx, y0, y1, pw, ph}, ...]
 
     try:
-        # PASADA 1: extraer texto e insertar cupones
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
-            p["total"] = len(pdf.pages)
-            log.info(f"[PDF] {p['total']} pags, prov={prov}")
+            total = len(pdf.pages)
+            p["total"] = total
+            log.info(f"[PDF] {total} paginas, provincia={prov}")
 
-            for idx, pag in enumerate(pdf.pages):
+            # ── PASADA 1: extraer texto e insertar cupones (rapido) ──
+            for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
-                pw, ph = float(pag.width), float(pag.height)
 
-                anclas = pag.search("ODONTOLOGIA POR ABONO MENSUAL")
-                anclas_izq = sorted([f for f in anclas if f['x0'] < pw/2], key=lambda f: f['top'])
+                pw, ph = float(pagina.width), float(pagina.height)
+                anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
+                anclas_izq = sorted(
+                    [f for f in anclas if f['x0'] < pw / 2],
+                    key=lambda f: f['top'])
                 if not anclas_izq:
                     continue
 
                 for i, f in enumerate(anclas_izq):
                     y0 = max(0, f['top'] - 5)
                     y1 = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
-                    izq = pag.within_bbox((0, y0, pw/2, y1)).extract_text() or ""
-                    der = pag.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
 
-                    # Teléfono
+                    txt_izq = pagina.within_bbox((0, y0, pw/2, y1)).extract_text() or ""
                     tel = "S/D"
-                    m = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', izq, re.I)
-                    if m:
-                        ns = re.findall(r'\d{8,12}', m.group(1))
-                        if ns: tel = ns[0]
+                    m_tel = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', txt_izq, re.IGNORECASE)
+                    if m_tel:
+                        nums = re.findall(r'\d{8,12}', m_tel.group(1))
+                        if nums: tel = nums[0]
                     if tel == "S/D":
-                        ns = re.findall(r'\d{10}', izq)
-                        if ns: tel = ns[0]
+                        nums = re.findall(r'\d{10}', txt_izq)
+                        if nums: tel = nums[0]
 
-                    # N° cuenta
+                    txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
+
                     cta_n = "S/D"
-                    m = re.search(r'N[°º.\s]\s*(\d+)', der)
-                    if m: cta_n = m.group(1)
+                    mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
+                    if mc: cta_n = mc.group(1)
 
-                    # Nombre afiliado
                     nom = "S/D"
-                    if "AFILIADO" in der.upper():
+                    if "AFILIADO" in txt_der.upper():
                         try:
-                            parte = der.upper().split("AFILIADO")[1]
-                            lins = [l.strip() for l in parte.split('\n') if l.strip()]
+                            parte = txt_der.upper().split("AFILIADO")[1]
+                            lineas = [l.strip() for l in parte.split('\n') if l.strip()]
                             parts = []
-                            for lin in lins[:2]:
-                                lim = re.sub(r'[^A-Z\s]', '', lin).strip()
-                                if lim and not any(k in lim for k in KW):
-                                    parts.append(lim)
+                            for linea in lineas[:2]:
+                                limpia = re.sub(r'[^A-Z\s]', '', linea).strip()
+                                if limpia and not any(k in limpia for k in KW):
+                                    parts.append(limpia)
                                 else:
                                     break
                             nom = ' '.join(parts).strip() or "S/D"
                         except: pass
 
-                    # Monto
                     monto = 0.0
-                    if "$" in der:
+                    if "$" in txt_der:
                         try:
-                            mp = der.split("$")[-1].split()[0]
+                            mp = txt_der.split("$")[-1].split()[0]
                             ml = re.sub(r'[^\d]', '', mp.split('.')[0])
                             if ml: monto = float(ml)
                         except: pass
 
-                    # Cuota
-                    cta_c = "S/D"
-                    m = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', der)
-                    if m: cta_c = m.group(1)
+                    cta_cuota = "S/D"
+                    mcu = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
+                    if mcu: cta_cuota = mcu.group(1)
 
-                    # Fecha
                     f_cobro = ""
-                    m = re.search(r'(\d{2}/\d{2}/\d{4})', der)
-                    if m: f_cobro = m.group(1)
+                    mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
+                    if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicado: cuenta + cuota + provincia
+                    # Anti-duplicado: misma cuenta + misma cuota
                     if cta_n != "S/D":
-                        q = sb.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov)
-                        if cta_c != "S/D":
-                            q = q.eq("cta", cta_c)
+                        q = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n).eq("provincia", prov)
+                        if cta_cuota != "S/D":
+                            q = q.eq("cta", cta_cuota)
                         if q.execute().data:
                             p["saltados"] += 1
                             continue
 
-                    ins = sb.table("cupones").insert({
+                    res_ins = supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
-                        "cta": cta_c, "telefono": tel, "provincia": prov,
+                        "cta": cta_cuota, "telefono": tel, "provincia": prov,
                         "img_path": "", "balance_inicial": monto,
                         "fecha_cobro": f_cobro, "estado": "PENDIENTE",
                         "visto": 0, "listo": False
                     }).execute()
                     p["detectados"] += 1
-                    if ins.data:
-                        items_img.append({
-                            "id": ins.data[0]["id"],
-                            "idx": idx, "y0": y0, "y1": y1, "pw": pw, "ph": ph
+
+                    if res_ins.data:
+                        insertados.append({
+                            "id": res_ins.data[0]["id"],
+                            "page_idx": idx,
+                            "y0": y0, "y1": y1, "pw": pw, "ph": ph
                         })
 
-        log.info(f"[PDF] Texto OK: {p['detectados']} cupones, {p['saltados']} saltados")
+        p["estado"] = "listo"
+        log.info(f"[PDF] Texto listo: {p['detectados']} cupones, {p['saltados']} saltados")
 
-        # PASADA 2: imágenes — cada página se renderiza UNA sola vez
-        if items_img:
+        # ── PASADA 2: extraer y subir imagenes a Storage ──
+        if insertados:
             p["estado"] = "imagenes"
-            p["img_total"] = len(items_img)
+            p["img_total"] = len(insertados)
             p["img_ok"] = 0
-            _procesar_imagenes(sb, contenido, items_img, p)
+            pagina_cache = {}  # cache: page_idx -> PIL Image
+
+            for item in insertados:
+                try:
+                    img_bytes = _extraer_recorte_png(
+                        contenido, item["page_idx"],
+                        item["y0"], item["y1"], item["pw"], item["ph"]
+                    )
+                    if img_bytes:
+                        nombre_img = f"{uuid.uuid4().hex}.jpg"
+                        url = _subir_imagen_storage(img_bytes, nombre_img)
+                        if url:
+                            supabase.table("cupones").update({"img_path": url})\
+                                .eq("id", item["id"]).execute()
+                            p["img_ok"] += 1
+                except Exception as e:
+                    log.warning(f"[IMG] id={item['id']} fallo: {e}")
+                    continue
+
+            log.info(f"[IMG] {p['img_ok']}/{p['img_total']} imagenes subidas")
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Listo. Imgs: {p.get('img_ok',0)}/{p.get('img_total',0)}")
 
     except Exception as e:
         p["estado"] = "error"
         p["error"] = str(e)
-        log.error(f"[PDF] FATAL: {traceback.format_exc()}")
-
+        log.error(f"[PDF] ERROR: {traceback.format_exc()}")
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
-    progreso_tareas[tarea_id] = {
-        "pagina": 0, "total": 0, "detectados": 0, "saltados": 0,
-        "img_ok": 0, "img_total": 0, "estado": "procesando"
-    }
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
+    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
+    t.start()
     return {"ok": True, "tarea_id": tarea_id}
 
-# ── REGENERAR IMÁGENES (cupones existentes sin imagen) ────────────────────────
-def regenerar_background(contenido: bytes, prov: str, tarea_id: str, sin_img: dict):
-    import traceback
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-    p = progreso_tareas[tarea_id]
-
-    try:
-        items_img = []
-        with pdfplumber.open(io.BytesIO(contenido)) as pdf:
-            for idx, pag in enumerate(pdf.pages):
-                pw, ph = float(pag.width), float(pag.height)
-                anclas = pag.search("ODONTOLOGIA POR ABONO MENSUAL")
-                anclas_izq = sorted([f for f in anclas if f['x0'] < pw/2], key=lambda f: f['top'])
-                for i, f in enumerate(anclas_izq):
-                    y0 = max(0, f['top'] - 5)
-                    y1 = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
-                    der = pag.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
-                    cta_n = "S/D"
-                    m = re.search(r'N[°º.\s]\s*(\d+)', der)
-                    if m: cta_n = m.group(1)
-                    cta_c = "S/D"
-                    m = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', der)
-                    if m: cta_c = m.group(1)
-                    cupon_id = sin_img.get((cta_n, cta_c)) or sin_img.get((cta_n, "S/D"))
-                    if cupon_id:
-                        items_img.append({
-                            "id": cupon_id, "idx": idx,
-                            "y0": y0, "y1": y1, "pw": pw, "ph": ph
-                        })
-
-        p["img_total"] = len(items_img)
-        log.info(f"[REGEN] {len(items_img)} cupones para {prov}")
-        _procesar_imagenes(sb, contenido, items_img, p)
-
-    except Exception as e:
-        log.error(f"[REGEN] FATAL: {traceback.format_exc()}")
-    finally:
-        p["estado"] = "listo"
-        log.info(f"[REGEN] Listo: {p.get('img_ok',0)}/{p.get('img_total',0)}")
-
-
-@app.post("/api/regenerar_imagenes")
-async def regenerar_imagenes(provincia: str = Form(...), pdf: UploadFile = File(...)):
-    import asyncio
-    contenido = await pdf.read()
-    prov = provincia.strip().upper()
-    res = supabase.table("cupones").select("id,cuenta,cta") \
-        .eq("provincia", prov).or_("img_path.eq.,img_path.is.null").execute()
-    sin_img = {}
-    for r in res.data:
-        sin_img[(r.get("cuenta", ""), r.get("cta") or "S/D")] = r["id"]
-    tarea_id = uuid.uuid4().hex
-    progreso_tareas[tarea_id] = {
-        "pagina": 0, "total": 0, "detectados": 0, "saltados": 0,
-        "img_ok": 0, "img_total": len(sin_img), "estado": "imagenes"
-    }
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, regenerar_background, contenido, prov, tarea_id, sin_img)
-    return {"ok": True, "tarea_id": tarea_id, "sin_imagen": len(sin_img)}
-
-# ── BALANCE ────────────────────────────────────────────────────────────────────
+# ── BALANCE ─────────────────────────────────────────────
 @app.get("/api/balance")
 async def get_balance(provincias: str):
     resultado = []
@@ -437,18 +354,15 @@ async def get_balance(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "cant": len(claves),
-            "inicial": sum(min(v) for v in por_cli.values()),
-            "cobrado": cobrado
-        })
+        resultado.append({"provincia": p, "cant": len(claves),
+                           "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado})
     return resultado
 
 @app.get("/api/balance_diario")
 async def balance_diario():
     hoy = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
-    clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
+    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
@@ -462,19 +376,17 @@ async def balance_diario():
     ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
-    return {
-        "fecha": datetime.now().strftime("%d/%m/%Y"),
-        "total_clientes": len(clientes), "total_general": tg,
-        "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
-        "clientes": [{**v, "key": k, "cuotas_str": ", ".join(v["cuotas"]), "multi": len(v["cuotas"]) > 1}
-                     for k, v in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"]))]
-    }
+    return {"fecha": datetime.now().strftime("%d/%m/%Y"),
+            "total_clientes": len(clientes), "total_general": tg,
+            "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
+            "clientes": [{**v,"key":k,"cuotas_str":", ".join(v["cuotas"]),"multi":len(v["cuotas"])>1}
+                         for k,v in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"]))]}
 
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt():
     hoy = datetime.now().strftime("%Y-%m-%d")
     pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
-    clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
+    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
@@ -489,17 +401,17 @@ async def balance_diario_txt():
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50, "     DENTAL WHITE - BALANCE DIARIO", f"     {fecha_fmt}", "="*50, ""]
+    lineas = ["="*50,"     DENTAL WHITE - BALANCE DIARIO",f"     {fecha_fmt}","="*50,""]
     prov_act = ""
-    for k, c in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"])):
+    for k,c in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"])):
         if c["provincia"] != prov_act:
             prov_act = c["provincia"]
-            lineas += ["", f"  [ {prov_act} ]", "-"*50]
+            lineas += ["",f"  [ {prov_act} ]","-"*50]
         cuotas = f"  (cta/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
         medio  = f"  [{c['medio']}]" if c["medio"] else ""
         nota   = f"  - {c['comentario']}" if c["comentario"] else ""
         lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio}{cuotas}{nota}")
-    lineas += ["", "="*50, f"  CLIENTES: {len(clientes)}", f"  TOTAL:    $ {tg:>10,.0f}", "-"*50]
+    lineas += ["","="*50,f"  CLIENTES: {len(clientes)}",f"  TOTAL:    $ {tg:>10,.0f}","-"*50]
     if tef: lineas.append(f"  Efectivo:       $ {tef:>10,.0f}")
     if ttr: lineas.append(f"  Transferencia:  $ {ttr:>10,.0f}")
     if tmp: lineas.append(f"  Mercado Pago:   $ {tmp:>10,.0f}")
@@ -521,18 +433,13 @@ async def cierre(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p,
-            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"]  += 1
-        metodos[m]["monto"] += r["monto"] or 0
+        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
     return {"provincias": resultado, "metodos": dict(metodos)}
 
 @app.get("/api/cierre/txt")
@@ -548,29 +455,24 @@ async def cierre_txt(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p,
-            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+                           "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())})
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"]  += 1
-        metodos[m]["monto"] += r["monto"] or 0
+        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50, "     DENTAL WHITE - CIERRE DEL DIA", f"     {fecha_fmt}", "="*50]
+    lineas = ["="*50,"     DENTAL WHITE - CIERRE DEL DIA",f"     {fecha_fmt}","="*50]
     tc, tp = 0, 0
     for r in resultado:
-        lineas += ["", f"  PROVINCIA: {r['provincia']}", "-"*50,
-                   f"  Cobrado hoy:  {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
-                   f"  Pendiente:    {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
+        lineas += ["",f"  PROVINCIA: {r['provincia']}","-"*50,
+                   f"  Cobrado:    {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
+                   f"  Pendiente:  {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
         tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
-    lineas += ["", "="*50, "  RESUMEN GENERAL", "-"*50,
-               f"  Total cobrado:   $ {tc:>10,.0f}", f"  Total pendiente: $ {tp:>10,.0f}", "", "  POR METODO:"]
-    for m, v in metodos.items():
+    lineas += ["","="*50,"  RESUMEN GENERAL","-"*50,
+               f"  Total cobrado:   $ {tc:>10,.0f}",f"  Total pendiente: $ {tp:>10,.0f}","","  POR METODO:"]
+    for m,v in metodos.items():
         lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
     lineas.append("="*50)
     nombre = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
@@ -578,24 +480,20 @@ async def cierre_txt(provincias: str):
 
 @app.post("/api/cierre/confirmar")
 async def cierre_confirmar(provincias: str = Form(...)):
-    """Cierre de mes: borra cupones de DB + imágenes del Storage."""
-    for prov in provincias.split(","):
-        prov = prov.strip()
-        # Recolectar paths de imágenes antes de borrar
-        res = supabase.table("cupones").select("img_path").eq("provincia", prov).execute()
-        paths = []
+    """Borra cupones Y sus imagenes del storage."""
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    for p in provincias.split(","):
+        p = p.strip()
+        # Recolectar todas las img_path antes de borrar
+        res = supabase.table("cupones").select("img_path").eq("provincia", p).execute()
         for r in res.data:
-            url = r.get("img_path") or ""
-            if "/object/public/cupones/" in url:
-                paths.append(url.split("/object/public/cupones/")[1])
-        # Borrar filas
-        supabase.table("cupones").delete().eq("provincia", prov).execute()
-        # Borrar imágenes en lotes de 100
-        for i in range(0, len(paths), 100):
-            try:
-                supabase.storage.from_("cupones").remove(paths[i:i+100])
-            except Exception as e:
-                log.warning(f"[CIERRE] Error borrando imgs de {prov}: {e}")
+            if r.get("img_path") and r["img_path"].startswith("http"):
+                try:
+                    _borrar_imagen_storage(r["img_path"])
+                except Exception as e:
+                    log.warning(f"[CIERRE] imagen no borrada: {e}")
+        supabase.table("cupones").delete().eq("provincia", p).execute()
     return {"ok": True}
 
 @app.get("/api/iniciar_mes/preview")
@@ -608,9 +506,6 @@ async def iniciar_mes_preview(provincias: str):
         for r in res.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "clientes": len(por_cli),
-            "cupones": len(res.data),
-            "monto": sum(min(v) for v in por_cli.values())
-        })
+        resultado.append({"provincia": p, "clientes": len(por_cli),
+                           "cupones": len(res.data), "monto": sum(min(v) for v in por_cli.values())})
     return resultado
