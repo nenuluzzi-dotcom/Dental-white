@@ -132,9 +132,13 @@ async def agregar_manual(provincia: str = Form(...)):
 @app.get("/api/cupon/{cupon_id}/imagen")
 async def get_imagen(cupon_id: int):
     res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
-    if not res.data or not res.data[0].get("img_path"):
+    if not res.data:
         raise HTTPException(404, "Sin imagen")
-    return {"url": res.data[0]["img_path"]}
+    img = res.data[0].get("img_path") or ""
+    if not img:
+        # imagen todavia procesando
+        return {"url": "", "pendiente": True}
+    return {"url": img, "pendiente": False}
 
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
@@ -303,12 +307,13 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
+    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
     progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
-    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
-    t.start()
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
     return {"ok": True, "tarea_id": tarea_id}
 
 @app.get("/api/balance")
