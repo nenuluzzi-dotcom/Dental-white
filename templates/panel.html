@@ -347,7 +347,7 @@ async function cargarDetalle(id) {
   lbl.className = 'switch-lbl '+(pagado?'pagado':'pendiente');
 
   // Renderizar visor
-  renderizarVisor(r.img_path);
+  renderizarVisor(r.img_path, r.id);
 }
 
 // ── VISOR IMAGEN (URL permanente de Supabase Storage) ──
@@ -494,12 +494,6 @@ async function subirPDF(event) {
         setTimeout(() => { fill.style.width='0%'; lbl.textContent=''; }, 6000);
         cargarTab(tabActual);
         cargarBalance();
-      } else if (pd.estado === 'imagenes') {
-        const ok = pd.img_ok || 0;
-        const tot = pd.img_total || pd.detectados;
-        const pct2 = tot > 0 ? Math.round((ok/tot)*100) : 50;
-        fill.style.width = Math.max(10, pct2) + '%';
-        lbl.textContent = `🖼️ Subiendo imagenes ${ok}/${tot}...`;
       } else if (pd.estado === 'error') {
         lbl.textContent = '❌ Error: ' + (pd.error||'ver logs');
         fill.style.width = '0%';
