@@ -269,7 +269,18 @@ def procesar_pdf_background(contenido, prov_actual, tarea_id):
     except Exception as e:
         progreso_tareas[tarea_id]["estado"] = "error"
         import traceback
-        raise HTTPException(500, str(e) + "\n" + traceback.format_exc()[-800:])
+        progreso_tareas[tarea_id]["error"] = str(e)
+
+@app.post("/api/subir_pdf")
+async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
+    contenido = await archivo.read()
+    tarea_id = uuid.uuid4().hex
+    prov_actual = provincia.strip().upper()
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
+    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov_actual, tarea_id))
+    t.daemon = True
+    t.start()
+    return {"ok": True, "tarea_id": tarea_id}
 
 # ── BALANCE ──────────────────────────────────────
 @app.get("/api/balance")
