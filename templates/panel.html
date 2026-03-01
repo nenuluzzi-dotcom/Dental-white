@@ -632,6 +632,7 @@ async function mostrarCierre() {
     </table>
     <div class="modal-footer">
       <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarCierreTxt()">💾 Guardar .txt</button>
       <button class="btn-modal btn-modal-rojo" onclick="confirmarCierre()">🗑️ Borrar todos los cupones</button>
     </div>
   `);
@@ -674,7 +675,7 @@ async function mostrarBalanceDiario() {
       <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Total</th><th>Método</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>
+    <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarBalanceTxt()">💾 Guardar .txt</button></div>
   `);
 }
 
@@ -682,6 +683,19 @@ async function mostrarBalanceDiario() {
 document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('modal-overlay')) cerrarModal();
 });
+
+// ── DESCARGA TXT ──
+function descargarBalanceTxt() {
+  const a = document.createElement('a');
+  a.href = '/api/balance_diario/txt';
+  a.click();
+}
+function descargarCierreTxt() {
+  const provs = JSON.parse(sessionStorage.getItem('provincias') || '[]');
+  const a = document.createElement('a');
+  a.href = '/api/cierre/txt?provincias=' + encodeURIComponent(provs.join(','));
+  a.click();
+}
 </script>
 </body>
 </html>
