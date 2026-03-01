@@ -51,7 +51,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
         .eq("provincia", provincia)
     if buscar:
         q = q.ilike("nombre", f"%{buscar}%")
-    rows = q.order("fecha_cobro").execute().data
+    rows = q.order("nombre").execute().data
 
     conteo = defaultdict(int)
     for r in rows:
@@ -62,6 +62,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+        r["cuotas_pendientes"] = conteo.get(clave, 0)
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
         elif clave in multi:
@@ -136,20 +137,20 @@ async def get_imagen(cupon_id: int):
         raise HTTPException(404, "Sin imagen")
     img = res.data[0].get("img_path") or ""
     if not img:
-        # imagen todavia procesando
-        return {"url": "", "pendiente": True}
-    return {"url": img, "pendiente": False}
+        raise HTTPException(404, "Sin imagen")
+    return {"url": img}
 
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
+    # Si no existe la tarea, devolver listo para no loop infinito
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "listo"})
 
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    p = progreso_tareas[tarea_id]
-    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
     import traceback, logging
     log = logging.getLogger("uvicorn.error")
-    ids_insertados = []  # guardar ids para subir imagenes despues
+    p = progreso_tareas[tarea_id]
+    KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+    ids_insertados = []
 
     try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
@@ -159,7 +160,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
-
                 pw, ph = float(pagina.width), float(pagina.height)
                 anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
                 anclas_izq = sorted(
@@ -183,7 +183,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         if nums: tel = nums[0]
 
                     txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
-
                     cta_n = "S/D"
                     mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
                     if mc: cta_n = mc.group(1)
@@ -223,10 +222,9 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     if cta_n != "S/D":
                         existe = supabase.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov).execute()
                         if existe.data:
-                            p["saltados"] += 1
+                            p["saltados"] = p.get("saltados", 0) + 1
                             continue
 
-                    # Guardar cupon SIN imagen (rapido, poca memoria)
                     res_ins = supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
                         "cta": cta_cuota, "telefono": tel, "provincia": prov,
@@ -234,23 +232,18 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         "fecha_cobro": f_cobro, "estado": "PENDIENTE",
                         "visto": 0, "listo": False
                     }).execute()
-                    p["detectados"] += 1
+                    p["detectados"] = p.get("detectados", 0) + 1
 
-                    # Guardar info para imagen (pagina, bbox)
                     if res_ins.data:
                         ids_insertados.append({
                             "id": res_ins.data[0]["id"],
-                            "idx": idx,
-                            "y0": y0, "y1": y1,
-                            "pw": pw, "ph": ph
+                            "idx": idx, "y0": y0, "y1": y1, "pw": pw, "ph": ph
                         })
 
-        p["estado"] = "listo"
-        log.info(f"[PDF] Texto listo: {p['detectados']} cupones, {p['saltados']} saltados")
+        log.info(f"[PDF] Texto listo: {p['detectados']} cupones. Subiendo imagenes...")
+        p["estado"] = "imagenes"
 
-        # SEGUNDA PASADA: subir imagenes (puede fallar sin problema)
         if ids_insertados:
-            p["estado"] = "imagenes"
             p["img_total"] = len(ids_insertados)
             p["img_ok"] = 0
             try:
@@ -294,10 +287,10 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
                 pdf_doc.close()
             except Exception as e:
-                log.error(f"[PDF] Error en pasada de imagenes: {e}")
+                log.error(f"[PDF] Error en imagenes: {e}\n{traceback.format_exc()}")
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Todo listo. Imagenes: {p.get('img_ok',0)}/{p.get('img_total',0)}")
+        log.info(f"[PDF] Todo listo. Cupones={p['detectados']}, Imagenes={p.get('img_ok',0)}/{p.get('img_total',0)}")
 
     except Exception as e:
         p["estado"] = "error"
@@ -307,13 +300,12 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
-    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "img_ok": 0, "img_total": 0, "estado": "procesando"}
+    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
+    t.start()
     return {"ok": True, "tarea_id": tarea_id}
 
 @app.get("/api/balance")
