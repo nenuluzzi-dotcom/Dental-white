@@ -59,7 +59,7 @@ def _recortar_y_subir(pdf_bytes: bytes, page_idx: int,
         doc  = pdfium.PdfDocument(pdf_bytes)
         page = doc[page_idx]
         # Escala: 150 DPI = 150/72 ≈ 2.08
-        SCALE = 150 / 72
+        SCALE = 96 / 72  # DPI bajo = menos RAM, suficiente para leer
         bm   = page.render(scale=SCALE)
         img  = bm.to_pil()          # PIL Image RGB
         doc.close()
@@ -197,91 +197,94 @@ async def get_progreso(tarea_id: str):
 
 # ── PROCESAMIENTO PDF ───────────────────────────────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    import logging, traceback
+    import logging, traceback, gc
     log = logging.getLogger("uvicorn.error")
     p   = progreso_tareas[tarea_id]
     KW  = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
-
-    insertados = []  # [{id, page_idx, y0, y1, pw, ph}]
+    insertados = []
 
     try:
+        # ── Pre-cargar cuentas existentes para anti-duplicado sin queries ──
+        existentes = set()
+        res_ex = supabase.table("cupones").select("cuenta,cta").eq("provincia", prov).execute()
+        for r in res_ex.data:
+            existentes.add((r.get("cuenta",""), r.get("cta","")))
+        log.info(f"[PDF] {len(existentes)} registros existentes en {prov}")
+
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
             log.info(f"[PDF] {total} pags, prov={prov}")
 
-            # ── PASADA 1: texto rapido ──────────────────
+            # ── PASADA 1: solo texto, sin imagenes ──────
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
 
                 pw, ph = float(pagina.width), float(pagina.height)
                 anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
                 anclas_izq = sorted(
-                    [f for f in anclas if f['x0'] < pw / 2],
-                    key=lambda f: f['top'])
+                    [f for f in anclas if f["x0"] < pw / 2],
+                    key=lambda f: f["top"])
                 if not anclas_izq:
                     continue
 
                 for i, f in enumerate(anclas_izq):
-                    y0 = max(0, f['top'] - 5)
-                    y1 = anclas_izq[i+1]['top'] - 5 if i+1 < len(anclas_izq) else ph
+                    y0 = max(0, f["top"] - 5)
+                    y1 = anclas_izq[i+1]["top"] - 5 if i+1 < len(anclas_izq) else ph
 
                     txt_izq = pagina.within_bbox((0, y0, pw/2, y1)).extract_text() or ""
                     tel = "S/D"
-                    m_tel = re.search(r'TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})', txt_izq, re.IGNORECASE)
+                    m_tel = re.search(r"TELEF[OÓ]NOS?\s*[\|\s]*(.{0,80})", txt_izq, re.IGNORECASE)
                     if m_tel:
-                        nums = re.findall(r'\d{8,12}', m_tel.group(1))
+                        nums = re.findall(r"\d{8,12}", m_tel.group(1))
                         if nums: tel = nums[0]
                     if tel == "S/D":
-                        nums = re.findall(r'\d{10}', txt_izq)
+                        nums = re.findall(r"\d{10}", txt_izq)
                         if nums: tel = nums[0]
 
                     txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
 
                     cta_n = "S/D"
-                    mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
+                    mc = re.search(r"N[°º.\s]\s*(\d+)", txt_der)
                     if mc: cta_n = mc.group(1)
 
                     nom = "S/D"
                     if "AFILIADO" in txt_der.upper():
                         try:
                             parte  = txt_der.upper().split("AFILIADO")[1]
-                            lineas = [l.strip() for l in parte.split('\n') if l.strip()]
+                            lineas = [l.strip() for l in parte.split("\n") if l.strip()]
                             parts  = []
                             for linea in lineas[:2]:
-                                limpia = re.sub(r'[^A-Z\s]', '', linea).strip()
+                                limpia = re.sub(r"[^A-Z\s]", "", linea).strip()
                                 if limpia and not any(k in limpia for k in KW):
                                     parts.append(limpia)
                                 else:
                                     break
-                            nom = ' '.join(parts).strip() or "S/D"
+                            nom = " ".join(parts).strip() or "S/D"
                         except: pass
 
                     monto = 0.0
                     if "$" in txt_der:
                         try:
                             mp = txt_der.split("$")[-1].split()[0]
-                            ml = re.sub(r'[^\d]', '', mp.split('.')[0])
+                            ml = re.sub(r"[^\d]", "", mp.split(".")[0])
                             if ml: monto = float(ml)
                         except: pass
 
                     cta_cuota = "S/D"
-                    mcu = re.search(r'\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}', txt_der)
+                    mcu = re.search(r"\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}", txt_der)
                     if mcu: cta_cuota = mcu.group(1)
 
                     f_cobro = ""
-                    mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
+                    mf = re.search(r"(\d{2}/\d{2}/\d{4})", txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicado: misma cuenta + misma cuota
-                    if cta_n != "S/D":
-                        q = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n).eq("provincia", prov)
-                        if cta_cuota != "S/D":
-                            q = q.eq("cta", cta_cuota)
-                        if q.execute().data:
-                            p["saltados"] += 1
-                            continue
+                    # Anti-duplicado en memoria (sin queries)
+                    clave_dup = (cta_n, cta_cuota)
+                    if cta_n != "S/D" and clave_dup in existentes:
+                        p["saltados"] += 1
+                        continue
+                    existentes.add(clave_dup)
 
                     res_ins = supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
@@ -302,7 +305,7 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
         p["estado"] = "listo"
         log.info(f"[PDF] Texto OK: {p['detectados']} cupones, {p['saltados']} saltados")
 
-        # ── PASADA 2: imagenes con pypdfium2 ───────────
+        # ── PASADA 2: imagenes de a UNA pagina por vez ──
         if insertados:
             p["estado"]    = "imagenes"
             p["img_total"] = len(insertados)
@@ -320,8 +323,11 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         supabase.table("cupones").update({"img_path": url})\
                             .eq("id", item["id"]).execute()
                         p["img_ok"] += 1
+                    gc.collect()  # liberar memoria despues de cada imagen
                 except Exception as e:
                     log.warning(f"[IMG] id={item['id']}: {e}")
+                    gc.collect()
+                    continue
 
             log.info(f"[IMG] {p['img_ok']}/{p['img_total']} subidas")
 
