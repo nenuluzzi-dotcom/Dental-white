@@ -218,9 +218,17 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicados
-                    if cta_n != "S/D":
-                        existe = supabase.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov).execute()
+                    # Anti-duplicados: mismo afiliado + misma cuota + misma provincia
+                    if cta_n != "S/D" and cta_cuota != "S/D":
+                        existe = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n).eq("cta", cta_cuota).eq("provincia", prov).execute()
+                        if existe.data:
+                            p["saltados"] = p.get("saltados", 0) + 1
+                            continue
+                    elif cta_n != "S/D":
+                        # Si no hay cuota, verificar por cuenta sola
+                        existe = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n).eq("provincia", prov).execute()
                         if existe.data:
                             p["saltados"] = p.get("saltados", 0) + 1
                             continue
@@ -300,12 +308,13 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
+    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
     progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "img_ok": 0, "img_total": 0, "estado": "procesando"}
-    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
-    t.start()
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
     return {"ok": True, "tarea_id": tarea_id}
 
 @app.get("/api/balance")
