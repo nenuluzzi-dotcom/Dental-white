@@ -44,54 +44,6 @@ async def do_login(usuario: str = Form(...), clave: str = Form(...)):
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
-# ── IMAGEN: recortar y subir a Storage ─────────────────
-def _recortar_y_subir(pdf_bytes: bytes, page_idx: int,
-                       y0_pt: float, y1_pt: float,
-                       pw_pt: float, ph_pt: float) -> str:
-    """
-    Renderiza la pagina con pypdfium2 (sin poppler, sin deps extra),
-    recorta la mitad derecha del cupon y sube a Supabase Storage.
-    Retorna la URL publica o "" si falla.
-    """
-    import logging
-    log = logging.getLogger("uvicorn.error")
-    try:
-        doc  = pdfium.PdfDocument(pdf_bytes)
-        page = doc[page_idx]
-        # Escala: 150 DPI = 150/72 ≈ 2.08
-        SCALE = 96 / 72  # DPI bajo = menos RAM, suficiente para leer
-        bm   = page.render(scale=SCALE)
-        img  = bm.to_pil()          # PIL Image RGB
-        doc.close()
-
-        iw, ih = img.size
-        sx = iw / pw_pt
-        sy = ih / ph_pt
-
-        x0 = int((pw_pt / 2) * sx)
-        y0 = max(0, int(y0_pt * sy))
-        y1 = min(ih, int(y1_pt * sy))
-
-        recorte = img.crop((x0, y0, iw, y1))
-        if recorte.width < 10 or recorte.height < 10:
-            return ""
-
-        buf = io.BytesIO()
-        recorte.save(buf, format="JPEG", quality=85)
-        datos = buf.getvalue()
-
-        nombre = f"imagenes/{uuid.uuid4().hex}.jpg"
-        supabase.storage.from_("cupones").upload(
-            path=nombre,
-            file=datos,
-            file_options={"content-type": "image/jpeg"}
-        )
-        return supabase.storage.from_("cupones").get_public_url(nombre)
-
-    except Exception as e:
-        log.warning(f"[IMG] fallo pag={page_idx}: {e}")
-        return ""
-
 def _borrar_img(img_path: str):
     if not img_path or not img_path.startswith("http"):
         return
@@ -195,28 +147,105 @@ async def get_progreso(tarea_id: str):
         "img_ok": 0, "img_total": 0
     })
 
-# ── PROCESAMIENTO PDF ───────────────────────────────────
-def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    import logging, traceback, gc
+# ── IMAGEN ON-DEMAND (renderiza 1 pagina al hacer click) ──
+@app.get("/api/imagen/{cupon_id}")
+async def get_imagen_cupon(cupon_id: int):
+    """
+    Descarga el PDF de Supabase, renderiza SOLO la pagina del cupon
+    y devuelve el recorte como JPEG. Sin guardar nada en disco.
+    """
+    import logging, httpx, gc
     log = logging.getLogger("uvicorn.error")
-    p   = progreso_tareas[tarea_id]
-    KW  = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
-    insertados = []
+
+    res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
+    if not res.data or not res.data[0].get("img_path"):
+        raise HTTPException(404, "Sin imagen")
+
+    img_path = res.data[0]["img_path"]
+
+    # Formato: REF|url_pdf|page_idx|y0_ratio|y1_ratio
+    if not img_path.startswith("REF|"):
+        # Es una URL directa de imagen vieja — redirigir
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(img_path)
+
+    parts     = img_path.split("|")
+    pdf_url   = parts[1]
+    page_idx  = int(parts[2])
+    y0r       = float(parts[3])
+    y1r       = float(parts[4])
 
     try:
-        # ── Pre-cargar cuentas existentes para anti-duplicado sin queries ──
+        # Descargar PDF
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(pdf_url)
+            pdf_bytes = r.content
+
+        # Renderizar UNA sola pagina con pypdfium2
+        doc   = pdfium.PdfDocument(pdf_bytes)
+        page  = doc[page_idx]
+        SCALE = 96 / 72  # DPI 96
+        bm    = page.render(scale=SCALE)
+        img   = bm.to_pil()
+        iw, ih = img.size
+        doc.close()
+        del pdf_bytes, bm
+        gc.collect()
+
+        # Recortar mitad derecha + franja vertical
+        x0 = iw // 2
+        y0 = max(0, int(ih * y0r))
+        y1 = min(ih, int(ih * y1r))
+        recorte = img.crop((x0, y0, iw, y1))
+        del img
+        gc.collect()
+
+        buf = io.BytesIO()
+        recorte.save(buf, format="JPEG", quality=82)
+        jpeg_bytes = buf.getvalue()
+        del recorte
+        gc.collect()
+
+        from fastapi.responses import Response as Resp
+        return Resp(content=jpeg_bytes, media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+    except Exception as e:
+        log.error(f"[IMG] on-demand fallo cupon={cupon_id}: {e}")
+        raise HTTPException(500, f"Error renderizando imagen: {e}")
+
+# ── PROCESAMIENTO PDF ───────────────────────────────────
+def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
+    import logging, traceback
+    log = logging.getLogger("uvicorn.error")
+    p   = progreso_tareas[tarea_id]
+    KW  = ["DIRECCION","PROVINCIA","COBRO","PLAN","MONTO","CTA","TALON","RECUERDE"]
+
+    try:
+        # Subir PDF a Storage UNA sola vez (para el visor)
+        pdf_nombre = f"pdfs/{tarea_id}.pdf"
+        pdf_url    = ""
+        try:
+            supabase.storage.from_("cupones").upload(
+                path=pdf_nombre, file=contenido,
+                file_options={"content-type": "application/pdf"}
+            )
+            pdf_url = supabase.storage.from_("cupones").get_public_url(pdf_nombre)
+            log.info(f"[PDF] Subido a storage: {pdf_url[:60]}...")
+        except Exception as e:
+            log.warning(f"[PDF] Storage fallo (continua sin imagen): {e}")
+
+        # Anti-duplicado en memoria
         existentes = set()
         res_ex = supabase.table("cupones").select("cuenta,cta").eq("provincia", prov).execute()
         for r in res_ex.data:
             existentes.add((r.get("cuenta",""), r.get("cta","")))
-        log.info(f"[PDF] {len(existentes)} registros existentes en {prov}")
 
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
             log.info(f"[PDF] {total} pags, prov={prov}")
 
-            # ── PASADA 1: solo texto, sin imagenes ──────
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
 
@@ -279,64 +308,37 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     mf = re.search(r"(\d{2}/\d{2}/\d{4})", txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicado en memoria (sin queries)
                     clave_dup = (cta_n, cta_cuota)
                     if cta_n != "S/D" and clave_dup in existentes:
                         p["saltados"] += 1
                         continue
                     existentes.add(clave_dup)
 
-                    res_ins = supabase.table("cupones").insert({
+                    # img_path guarda referencia: URL_PDF|page_idx|y0_ratio|y1_ratio
+                    # El endpoint /api/imagen/{id} renderiza solo esa pagina al hacer click
+                    if pdf_url:
+                        y0r = round(y0 / ph, 4)
+                        y1r = round(y1 / ph, 4)
+                        img_ref = f"REF|{pdf_url}|{idx}|{y0r}|{y1r}"
+                    else:
+                        img_ref = ""
+
+                    supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
                         "cta": cta_cuota, "telefono": tel, "provincia": prov,
-                        "img_path": "", "balance_inicial": monto,
+                        "img_path": img_ref, "balance_inicial": monto,
                         "fecha_cobro": f_cobro, "estado": "PENDIENTE",
                         "visto": 0, "listo": False
                     }).execute()
                     p["detectados"] += 1
 
-                    if res_ins.data:
-                        insertados.append({
-                            "id": res_ins.data[0]["id"],
-                            "page_idx": idx,
-                            "y0": y0, "y1": y1, "pw": pw, "ph": ph
-                        })
-
         p["estado"] = "listo"
-        log.info(f"[PDF] Texto OK: {p['detectados']} cupones, {p['saltados']} saltados")
-
-        # ── PASADA 2: imagenes de a UNA pagina por vez ──
-        if insertados:
-            p["estado"]    = "imagenes"
-            p["img_total"] = len(insertados)
-            p["img_ok"]    = 0
-
-            for item in insertados:
-                try:
-                    url = _recortar_y_subir(
-                        contenido,
-                        item["page_idx"],
-                        item["y0"], item["y1"],
-                        item["pw"], item["ph"]
-                    )
-                    if url:
-                        supabase.table("cupones").update({"img_path": url})\
-                            .eq("id", item["id"]).execute()
-                        p["img_ok"] += 1
-                    gc.collect()  # liberar memoria despues de cada imagen
-                except Exception as e:
-                    log.warning(f"[IMG] id={item['id']}: {e}")
-                    gc.collect()
-                    continue
-
-            log.info(f"[IMG] {p['img_ok']}/{p['img_total']} subidas")
-
-        p["estado"] = "listo"
+        log.info(f"[PDF] Listo: {p['detectados']} cupones, {p['saltados']} saltados")
 
     except Exception as e:
         p["estado"] = "error"
         p["error"]  = str(e)
-        log.error(f"[PDF] ERROR FATAL: {traceback.format_exc()}")
+        log.error(f"[PDF] ERROR: {traceback.format_exc()}")
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
