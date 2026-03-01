@@ -143,11 +143,15 @@ async def get_progreso(tarea_id: str):
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
     p = progreso_tareas[tarea_id]
     KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
+    import traceback, logging
+    log = logging.getLogger("uvicorn.error")
+    ids_insertados = []  # guardar ids para subir imagenes despues
+
     try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
-
+            log.info(f"[PDF] Iniciando: {total} paginas, provincia={prov}")
 
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
@@ -159,16 +163,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     key=lambda f: f['top'])
                 if not anclas_izq:
                     continue
-
-                # Convertir solo esta pagina con pypdfium2 (rapido, poca memoria)
-                pdf_doc = pdfium.PdfDocument(contenido)
-                pag_pdf = pdf_doc[idx]
-                bitmap = pag_pdf.render(scale=120/72)
-                img_pil = bitmap.to_pil()
-                pdf_doc.close()
-                img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                hi, wi = img_cv.shape[:2]
-                sy, sx = hi / ph, wi / pw
 
                 for i, f in enumerate(anclas_izq):
                     y0 = max(0, f['top'] - 5)
@@ -223,46 +217,89 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
                     # Anti-duplicados
                     if cta_n != "S/D":
-                        existe = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n).eq("provincia", prov).execute()
+                        existe = supabase.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov).execute()
                         if existe.data:
                             p["saltados"] += 1
                             continue
 
-                    # Recortar mitad derecha del cupón
-                    y0i = max(0, int(y0 * sy))
-                    y1i = min(hi, int(y1 * sy))
-                    x0i = int((pw / 2) * sx)
-                    recorte = img_cv[y0i:y1i, x0i:wi]
+                    # Guardar cupon SIN imagen (rapido, poca memoria)
+                    res_ins = supabase.table("cupones").insert({
+                        "cuenta": cta_n, "nombre": nom, "monto": monto,
+                        "cta": cta_cuota, "telefono": tel, "provincia": prov,
+                        "img_path": "", "balance_inicial": monto,
+                        "fecha_cobro": f_cobro, "estado": "PENDIENTE",
+                        "visto": 0, "listo": False
+                    }).execute()
+                    p["detectados"] += 1
 
-                    img_url = ""
-                    if recorte.size > 0:
-                        try:
+                    # Guardar info para imagen (pagina, bbox)
+                    if res_ins.data:
+                        ids_insertados.append({
+                            "id": res_ins.data[0]["id"],
+                            "idx": idx,
+                            "y0": y0, "y1": y1,
+                            "pw": pw, "ph": ph
+                        })
+
+        p["estado"] = "listo"
+        log.info(f"[PDF] Texto listo: {p['detectados']} cupones, {p['saltados']} saltados")
+
+        # SEGUNDA PASADA: subir imagenes (puede fallar sin problema)
+        if ids_insertados:
+            p["estado"] = "imagenes"
+            p["img_total"] = len(ids_insertados)
+            p["img_ok"] = 0
+            try:
+                pdf_doc = pdfium.PdfDocument(contenido)
+                pagina_actual = -1
+                img_cv = None
+                hi = wi = 0
+                sy = sx = 1.0
+
+                for item in ids_insertados:
+                    try:
+                        if item["idx"] != pagina_actual:
+                            pagina_actual = item["idx"]
+                            pag_pdf = pdf_doc[pagina_actual]
+                            bitmap = pag_pdf.render(scale=100/72)
+                            img_pil = bitmap.to_pil()
+                            img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                            hi, wi = img_cv.shape[:2]
+                            sy = hi / item["ph"]
+                            sx = wi / item["pw"]
+
+                        y0i = max(0, int(item["y0"] * sy))
+                        y1i = min(hi, int(item["y1"] * sy))
+                        x0i = int((item["pw"] / 2) * sx)
+                        recorte = img_cv[y0i:y1i, x0i:wi]
+
+                        if recorte.size > 0:
                             nombre_img = f"{uuid.uuid4().hex}.jpg"
-                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 80])
                             supabase.storage.from_("cupones").upload(
                                 path=nombre_img,
                                 file=buf.tobytes(),
                                 file_options={"content-type": "image/jpeg"}
                             )
                             img_url = supabase.storage.from_("cupones").get_public_url(nombre_img)
-                        except Exception as e:
-                            p["ultimo_error_img"] = str(e)
-                            img_url = ""
+                            supabase.table("cupones").update({"img_path": img_url}).eq("id", item["id"]).execute()
+                            p["img_ok"] += 1
+                    except Exception as e:
+                        log.warning(f"[PDF] Imagen id={item['id']} fallo: {e}")
+                        continue
 
-                    supabase.table("cupones").insert({
-                        "cuenta": cta_n, "nombre": nom, "monto": monto,
-                        "cta": cta_cuota, "telefono": tel, "provincia": prov,
-                        "img_path": img_url, "balance_inicial": monto,
-                        "fecha_cobro": f_cobro, "estado": "PENDIENTE",
-                        "visto": 0, "listo": False
-                    }).execute()
-                    p["detectados"] += 1
+                pdf_doc.close()
+            except Exception as e:
+                log.error(f"[PDF] Error en pasada de imagenes: {e}")
 
         p["estado"] = "listo"
+        log.info(f"[PDF] Todo listo. Imagenes: {p.get('img_ok',0)}/{p.get('img_total',0)}")
+
     except Exception as e:
         p["estado"] = "error"
         p["error"] = str(e)
+        log.error(f"[PDF] ERROR FATAL: {traceback.format_exc()}")
+
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
