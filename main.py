@@ -2,12 +2,10 @@ import os, re, uuid, io, threading
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
-import cv2, numpy as np
-import pypdfium2 as pdfium
 import pdfplumber
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xejfkrzaofqjzvzjyovh.supabase.co")
@@ -27,6 +25,7 @@ PROVINCIAS = {
 
 progreso_tareas = {}
 
+# ── LOGIN ──────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -34,15 +33,16 @@ async def login(request: Request):
 @app.post("/login")
 async def do_login(usuario: str = Form(...), clave: str = Form(...)):
     if clave.lower() != "union":
-        raise HTTPException(status_code=401, detail="Clave incorrecta")
+        raise HTTPException(401, "Clave incorrecta")
     if usuario not in PROVINCIAS:
-        raise HTTPException(status_code=401, detail="Usuario invalido")
+        raise HTTPException(401, "Usuario invalido")
     return {"ok": True, "usuario": usuario, "provincias": PROVINCIAS[usuario]}
 
 @app.get("/panel", response_class=HTMLResponse)
 async def panel(request: Request):
     return templates.TemplateResponse("panel.html", {"request": request})
 
+# ── CUPONES ────────────────────────────────────────────
 @app.get("/api/cupones")
 async def get_cupones(provincia: str, buscar: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
@@ -51,7 +51,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
         .eq("provincia", provincia)
     if buscar:
         q = q.ilike("nombre", f"%{buscar}%")
-    rows = q.order("nombre").execute().data
+    rows = q.order("fecha_cobro").execute().data
 
     conteo = defaultdict(int)
     for r in rows:
@@ -62,7 +62,6 @@ async def get_cupones(provincia: str, buscar: str = ""):
 
     for r in rows:
         clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        r["cuotas_pendientes"] = conteo.get(clave, 0)
         if r["estado"] == "PAGADO" or r.get("listo"):
             r["color"] = "verde"
         elif clave in multi:
@@ -133,33 +132,46 @@ async def agregar_manual(provincia: str = Form(...)):
 @app.get("/api/cupon/{cupon_id}/imagen")
 async def get_imagen(cupon_id: int):
     res = supabase.table("cupones").select("img_path").eq("id", cupon_id).execute()
-    if not res.data:
+    if not res.data or not res.data[0].get("img_path"):
         raise HTTPException(404, "Sin imagen")
-    img = res.data[0].get("img_path") or ""
-    if not img:
-        raise HTTPException(404, "Sin imagen")
-    return {"url": img}
+    return {"url": res.data[0]["img_path"]}
 
+# ── PROGRESO ───────────────────────────────────────────
 @app.get("/api/progreso/{tarea_id}")
 async def get_progreso(tarea_id: str):
-    # Si no existe la tarea, devolver listo para no loop infinito
-    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "listo"})
+    return progreso_tareas.get(tarea_id, {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"})
 
+# ── OCR BACKGROUND: solo texto, sin imagenes ───────────
 def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
-    import traceback, logging
+    import logging, traceback
     log = logging.getLogger("uvicorn.error")
     p = progreso_tareas[tarea_id]
     KW = ['DIRECCION','PROVINCIA','COBRO','PLAN','MONTO','CTA','TALON','RECUERDE']
-    ids_insertados = []
 
     try:
+        # 1. Subir el PDF completo a Storage UNA SOLA VEZ
+        pdf_nombre = f"pdfs/{uuid.uuid4().hex}.pdf"
+        try:
+            supabase.storage.from_("cupones").upload(
+                path=pdf_nombre,
+                file=contenido,
+                file_options={"content-type": "application/pdf"}
+            )
+            pdf_url = supabase.storage.from_("cupones").get_public_url(pdf_nombre)
+            log.info(f"[PDF] PDF subido: {pdf_url}")
+        except Exception as e:
+            log.error(f"[PDF] No se pudo subir PDF a storage: {e}")
+            pdf_url = ""
+
+        # 2. Extraer texto pagina por pagina (rapido, sin conversion de imagen)
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
             total = len(pdf.pages)
             p["total"] = total
-            log.info(f"[PDF] Iniciando: {total} paginas, provincia={prov}")
+            log.info(f"[PDF] {total} paginas, provincia={prov}")
 
             for idx, pagina in enumerate(pdf.pages):
                 p["pagina"] = idx + 1
+
                 pw, ph = float(pagina.width), float(pagina.height)
                 anclas = pagina.search("ODONTOLOGIA POR ABONO MENSUAL")
                 anclas_izq = sorted(
@@ -183,6 +195,7 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         if nums: tel = nums[0]
 
                     txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
+
                     cta_n = "S/D"
                     mc = re.search(r'N[°º.\s]\s*(\d+)', txt_der)
                     if mc: cta_n = mc.group(1)
@@ -218,105 +231,50 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Anti-duplicados: mismo afiliado + misma cuota + misma provincia
-                    if cta_n != "S/D" and cta_cuota != "S/D":
-                        existe = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n).eq("cta", cta_cuota).eq("provincia", prov).execute()
+                    # Anti-duplicados
+                    if cta_n != "S/D":
+                        existe = supabase.table("cupones").select("id").eq("cuenta", cta_n).eq("provincia", prov).execute()
                         if existe.data:
-                            p["saltados"] = p.get("saltados", 0) + 1
-                            continue
-                    elif cta_n != "S/D":
-                        # Si no hay cuota, verificar por cuenta sola
-                        existe = supabase.table("cupones").select("id")\
-                            .eq("cuenta", cta_n).eq("provincia", prov).execute()
-                        if existe.data:
-                            p["saltados"] = p.get("saltados", 0) + 1
+                            p["saltados"] += 1
                             continue
 
-                    res_ins = supabase.table("cupones").insert({
+                    # img_path guarda referencia al PDF + pagina + bbox (para PDF.js)
+                    # formato: PDFPAGE|url|page_idx|y0_ratio|y1_ratio
+                    if pdf_url:
+                        y0r = round(y0 / ph, 4)
+                        y1r = round(y1 / ph, 4)
+                        img_ref = f"PDFPAGE|{pdf_url}|{idx}|{y0r}|{y1r}"
+                    else:
+                        img_ref = ""
+
+                    supabase.table("cupones").insert({
                         "cuenta": cta_n, "nombre": nom, "monto": monto,
                         "cta": cta_cuota, "telefono": tel, "provincia": prov,
-                        "img_path": "", "balance_inicial": monto,
+                        "img_path": img_ref, "balance_inicial": monto,
                         "fecha_cobro": f_cobro, "estado": "PENDIENTE",
                         "visto": 0, "listo": False
                     }).execute()
-                    p["detectados"] = p.get("detectados", 0) + 1
-
-                    if res_ins.data:
-                        ids_insertados.append({
-                            "id": res_ins.data[0]["id"],
-                            "idx": idx, "y0": y0, "y1": y1, "pw": pw, "ph": ph
-                        })
-
-        log.info(f"[PDF] Texto listo: {p['detectados']} cupones. Subiendo imagenes...")
-        p["estado"] = "imagenes"
-
-        if ids_insertados:
-            p["img_total"] = len(ids_insertados)
-            p["img_ok"] = 0
-            try:
-                pdf_doc = pdfium.PdfDocument(contenido)
-                pagina_actual = -1
-                img_cv = None
-                hi = wi = 0
-                sy = sx = 1.0
-
-                for item in ids_insertados:
-                    try:
-                        if item["idx"] != pagina_actual:
-                            pagina_actual = item["idx"]
-                            pag_pdf = pdf_doc[pagina_actual]
-                            bitmap = pag_pdf.render(scale=100/72)
-                            img_pil = bitmap.to_pil()
-                            img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            hi, wi = img_cv.shape[:2]
-                            sy = hi / item["ph"]
-                            sx = wi / item["pw"]
-
-                        y0i = max(0, int(item["y0"] * sy))
-                        y1i = min(hi, int(item["y1"] * sy))
-                        x0i = int((item["pw"] / 2) * sx)
-                        recorte = img_cv[y0i:y1i, x0i:wi]
-
-                        if recorte.size > 0:
-                            nombre_img = f"{uuid.uuid4().hex}.jpg"
-                            _, buf = cv2.imencode('.jpg', recorte, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                            supabase.storage.from_("cupones").upload(
-                                path=nombre_img,
-                                file=buf.tobytes(),
-                                file_options={"content-type": "image/jpeg"}
-                            )
-                            img_url = supabase.storage.from_("cupones").get_public_url(nombre_img)
-                            supabase.table("cupones").update({"img_path": img_url}).eq("id", item["id"]).execute()
-                            p["img_ok"] += 1
-                    except Exception as e:
-                        log.warning(f"[PDF] Imagen id={item['id']} fallo: {e}")
-                        continue
-
-                pdf_doc.close()
-            except Exception as e:
-                log.error(f"[PDF] Error en imagenes: {e}\n{traceback.format_exc()}")
+                    p["detectados"] += 1
 
         p["estado"] = "listo"
-        log.info(f"[PDF] Todo listo. Cupones={p['detectados']}, Imagenes={p.get('img_ok',0)}/{p.get('img_total',0)}")
+        log.info(f"[PDF] Listo: {p['detectados']} cupones insertados")
 
     except Exception as e:
         p["estado"] = "error"
         p["error"] = str(e)
-        log.error(f"[PDF] ERROR FATAL: {traceback.format_exc()}")
-
+        log.error(f"[PDF] ERROR: {traceback.format_exc()}")
 
 @app.post("/api/subir_pdf")
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
-    import asyncio
     contenido = await archivo.read()
     tarea_id = uuid.uuid4().hex
     prov = provincia.strip().upper()
-    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "img_ok": 0, "img_total": 0, "estado": "procesando"}
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, procesar_pdf_background, contenido, prov, tarea_id)
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
+    t = threading.Thread(target=procesar_pdf_background, args=(contenido, prov, tarea_id), daemon=True)
+    t.start()
     return {"ok": True, "tarea_id": tarea_id}
 
+# ── BALANCE ────────────────────────────────────────────
 @app.get("/api/balance")
 async def get_balance(provincias: str):
     resultado = []
@@ -333,8 +291,7 @@ async def get_balance(provincias: str):
         for r in res_pen.data:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
-        inicial = sum(min(v) for v in por_cli.values())
-        resultado.append({"provincia": p, "cant": len(claves), "inicial": inicial, "cobrado": cobrado})
+        resultado.append({"provincia": p, "cant": len(claves), "inicial": sum(min(v) for v in por_cli.values()), "cobrado": cobrado})
     return resultado
 
 @app.get("/api/balance_diario")
@@ -382,22 +339,22 @@ async def balance_diario_txt():
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["=" * 50, "     DENTAL WHITE - BALANCE DIARIO", f"     {fecha_fmt}", "=" * 50, ""]
+    lineas = ["="*50, "     DENTAL WHITE - BALANCE DIARIO", f"     {fecha_fmt}", "="*50, ""]
     prov_act = ""
     for k, c in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"])):
         if c["provincia"] != prov_act:
             prov_act = c["provincia"]
-            lineas += ["", f"  [ {prov_act} ]", "-" * 50]
+            lineas += ["", f"  [ {prov_act} ]", "-"*50]
         cuotas = f"  (cta/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
         medio  = f"  [{c['medio']}]" if c["medio"] else ""
         nota   = f"  - {c['comentario']}" if c["comentario"] else ""
         lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio}{cuotas}{nota}")
-    lineas += ["", "=" * 50, f"  CLIENTES: {len(clientes)}", f"  TOTAL:    $ {tg:>10,.0f}", "-" * 50]
+    lineas += ["", "="*50, f"  CLIENTES: {len(clientes)}", f"  TOTAL:    $ {tg:>10,.0f}", "-"*50]
     if tef: lineas.append(f"  Efectivo:       $ {tef:>10,.0f}")
     if ttr: lineas.append(f"  Transferencia:  $ {ttr:>10,.0f}")
     if tmp: lineas.append(f"  Mercado Pago:   $ {tmp:>10,.0f}")
     if tta: lineas.append(f"  Tarjeta:        $ {tta:>10,.0f}")
-    lineas.append("=" * 50)
+    lineas.append("="*50)
     nombre = f"balance_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
@@ -415,17 +372,14 @@ async def cierre(provincias: str):
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
         resultado.append({
-            "provincia": p,
-            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
+            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())
         })
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"]  += 1
-        metodos[m]["monto"] += r["monto"] or 0
+        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
     return {"provincias": resultado, "metodos": dict(metodos)}
 
 @app.get("/api/cierre/txt")
@@ -442,30 +396,27 @@ async def cierre_txt(provincias: str):
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
         resultado.append({
-            "provincia": p,
-            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
+            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cli), "pendiente_monto": sum(min(v) for v in por_cli.values())
         })
     res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"]  += 1
-        metodos[m]["monto"] += r["monto"] or 0
+        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
     fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
-    lineas = ["=" * 50, "     DENTAL WHITE - CIERRE DEL DIA", f"     {fecha_fmt}", "=" * 50]
+    lineas = ["="*50, "     DENTAL WHITE - CIERRE DEL DIA", f"     {fecha_fmt}", "="*50]
     tc, tp = 0, 0
     for r in resultado:
-        lineas += ["", f"  PROVINCIA: {r['provincia']}", "-" * 50,
-                   f"  Cobrado hoy:  {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
-                   f"  Pendiente:    {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
+        lineas += ["", f"  PROVINCIA: {r['provincia']}", "-"*50,
+                   f"  Cobrado:    {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
+                   f"  Pendiente:  {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
         tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
-    lineas += ["", "=" * 50, "  RESUMEN GENERAL", "-" * 50,
+    lineas += ["", "="*50, "  RESUMEN GENERAL", "-"*50,
                f"  Total cobrado:   $ {tc:>10,.0f}", f"  Total pendiente: $ {tp:>10,.0f}", "", "  POR METODO:"]
     for m, v in metodos.items():
         lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
-    lineas.append("=" * 50)
+    lineas.append("="*50)
     nombre = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
@@ -487,7 +438,6 @@ async def iniciar_mes_preview(provincias: str):
             por_cli[clave].append(r["monto"] or 0)
         resultado.append({
             "provincia": p, "clientes": len(por_cli),
-            "cupones": len(res.data),
-            "monto": sum(min(v) for v in por_cli.values())
+            "cupones": len(res.data), "monto": sum(min(v) for v in por_cli.values())
         })
     return resultado
