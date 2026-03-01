@@ -2,7 +2,7 @@ import os, re, uuid, io
 from datetime import datetime
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from supabase import create_client, Client
@@ -153,9 +153,10 @@ async def get_progreso(tarea_id: str):
 async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...)):
     contenido = await archivo.read()
     detectados = 0
+    saltados = 0
     prov_actual = provincia.strip().upper()
     tarea_id = uuid.uuid4().hex
-    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "estado": "procesando"}
+    progreso_tareas[tarea_id] = {"pagina": 0, "total": 0, "detectados": 0, "saltados": 0, "estado": "procesando"}
 
     try:
         with pdfplumber.open(io.BytesIO(contenido)) as pdf:
@@ -231,6 +232,17 @@ async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...))
                     mf = re.search(r'(\d{2}/\d{2}/\d{4})', txt_der)
                     if mf: f_cobro = mf.group(1)
 
+                    # ── ANTI-DUPLICADOS: verificar si ya existe cuenta+mes ──
+                    if cta_n != "S/D":
+                        existente = supabase.table("cupones").select("id")\
+                            .eq("cuenta", cta_n)\
+                            .eq("provincia", prov_actual)\
+                            .execute()
+                        if existente.data and len(existente.data) > 0:
+                            saltados += 1
+                            progreso_tareas[tarea_id]["saltados"] = saltados
+                            continue
+
                     y0_img = int(y0_pdf * escala_y)
                     y1_img = int(y1_pdf * escala_y)
                     x0_img = int((pw/2) * escala_x)
@@ -260,7 +272,7 @@ async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...))
                     progreso_tareas[tarea_id]["detectados"] = detectados
 
         progreso_tareas[tarea_id]["estado"] = "listo"
-        return {"ok": True, "detectados": detectados, "paginas": total, "tarea_id": tarea_id}
+        return {"ok": True, "detectados": detectados, "saltados": saltados, "paginas": total, "tarea_id": tarea_id}
     except Exception as e:
         progreso_tareas[tarea_id]["estado"] = "error"
         import traceback
@@ -319,6 +331,133 @@ async def balance_diario():
         "clientes": [{**v, "key": k, "cuotas_str": ", ".join(v["cuotas"]), "multi": len(v["cuotas"]) > 1}
                      for k, v in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"]))]
     }
+
+# ── EXPORTAR BALANCE COMO TXT ─────────────────────
+@app.get("/api/balance_diario/txt")
+async def balance_diario_txt():
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    res = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute()
+    clientes = defaultdict(lambda: {"nombre": "", "cuotas": [], "total": 0.0, "medio": "", "comentario": "", "provincia": ""})
+    for r in res.data:
+        key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+        clientes[key]["nombre"] = r["nombre"] or ""
+        clientes[key]["provincia"] = r["provincia"] or ""
+        clientes[key]["medio"] = r["medio_pago"] or ""
+        clientes[key]["comentario"] = r["comentario"] or ""
+        clientes[key]["total"] += r["monto"] or 0
+        if r["cta"]: clientes[key]["cuotas"].append(str(r["cta"]))
+
+    total_general  = sum(c["total"] for c in clientes.values())
+    total_efectivo = sum(c["total"] for c in clientes.values() if "EFECTIVO" in (c["medio"] or "").upper())
+    total_transfer = sum(c["total"] for c in clientes.values() if "TRANSFER" in (c["medio"] or "").upper())
+    total_mp       = sum(c["total"] for c in clientes.values() if "MERCADO"  in (c["medio"] or "").upper())
+    total_tarjeta  = sum(c["total"] for c in clientes.values() if "TARJETA"  in (c["medio"] or "").upper())
+
+    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
+    lineas = []
+    lineas.append("=" * 50)
+    lineas.append("         DENTAL WHITE - BALANCE DIARIO")
+    lineas.append(f"         {fecha_fmt}")
+    lineas.append("=" * 50)
+    lineas.append("")
+
+    prov_actual = ""
+    for k, c in sorted(clientes.items(), key=lambda x: (x[1]["provincia"], x[1]["nombre"])):
+        if c["provincia"] != prov_actual:
+            prov_actual = c["provincia"]
+            lineas.append("")
+            lineas.append(f"  [ {prov_actual} ]")
+            lineas.append("-" * 50)
+        cuotas_str = f"  (cuota/s: {', '.join(c['cuotas'])})" if c["cuotas"] else ""
+        medio_str = f"  [{c['medio']}]" if c["medio"] else ""
+        comentario_str = f"  - {c['comentario']}" if c["comentario"] else ""
+        lineas.append(f"  {c['nombre']:<30} $ {c['total']:>10,.0f}{medio_str}{cuotas_str}{comentario_str}")
+
+    lineas.append("")
+    lineas.append("=" * 50)
+    lineas.append(f"  TOTAL CLIENTES: {len(clientes)}")
+    lineas.append(f"  TOTAL GENERAL:  $ {total_general:>10,.0f}")
+    lineas.append("-" * 50)
+    if total_efectivo:  lineas.append(f"  Efectivo:       $ {total_efectivo:>10,.0f}")
+    if total_transfer:  lineas.append(f"  Transferencia:  $ {total_transfer:>10,.0f}")
+    if total_mp:        lineas.append(f"  Mercado Pago:   $ {total_mp:>10,.0f}")
+    if total_tarjeta:   lineas.append(f"  Tarjeta:        $ {total_tarjeta:>10,.0f}")
+    lineas.append("=" * 50)
+
+    contenido_txt = "\n".join(lineas)
+    nombre_archivo = f"balance_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+
+    return PlainTextResponse(
+        content=contenido_txt,
+        headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
+    )
+
+# ── EXPORTAR CIERRE COMO TXT ──────────────────────
+@app.get("/api/cierre/txt")
+async def cierre_txt(provincias: str):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    provs = provincias.split(",")
+    resultado = []
+    for p in provs:
+        res_cob = supabase.table("cupones").select("cuenta,nombre,monto,medio_pago").eq("provincia", p.strip()).eq("fecha_pago", hoy).execute()
+        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
+        res_pend = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p.strip()).eq("estado", "PENDIENTE").execute()
+        por_cliente = defaultdict(list)
+        for r in res_pend.data:
+            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+            por_cliente[clave].append(r["monto"] or 0)
+        resultado.append({
+            "provincia": p.strip(),
+            "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
+            "pendiente_cant": len(por_cliente),
+            "pendiente_monto": sum(min(v) for v in por_cliente.values()),
+            "detalle_cobrado": res_cob.data
+        })
+
+    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
+    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
+    for r in res_met.data:
+        m = r["medio_pago"] or "SIN MÉTODO"
+        metodos[m]["cant"] += 1
+        metodos[m]["monto"] += r["monto"] or 0
+
+    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
+    lineas = []
+    lineas.append("=" * 50)
+    lineas.append("         DENTAL WHITE - CIERRE DEL DIA")
+    lineas.append(f"         {fecha_fmt}")
+    lineas.append("=" * 50)
+
+    total_cobrado_gral = 0
+    total_pendiente_gral = 0
+    for r in resultado:
+        lineas.append("")
+        lineas.append(f"  PROVINCIA: {r['provincia']}")
+        lineas.append("-" * 50)
+        lineas.append(f"  Cobrado hoy:  {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}")
+        lineas.append(f"  Pendiente:    {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}")
+        total_cobrado_gral += r["cobrado_monto"]
+        total_pendiente_gral += r["pendiente_monto"]
+
+    lineas.append("")
+    lineas.append("=" * 50)
+    lineas.append("  RESUMEN GENERAL")
+    lineas.append("-" * 50)
+    lineas.append(f"  Total cobrado:   $ {total_cobrado_gral:>10,.0f}")
+    lineas.append(f"  Total pendiente: $ {total_pendiente_gral:>10,.0f}")
+    lineas.append("")
+    lineas.append("  POR METODO DE PAGO:")
+    for m, v in metodos.items():
+        lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
+    lineas.append("=" * 50)
+
+    contenido_txt = "\n".join(lineas)
+    nombre_archivo = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+
+    return PlainTextResponse(
+        content=contenido_txt,
+        headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
+    )
 
 # ── CIERRE ────────────────────────────────────────
 @app.get("/api/cierre")
