@@ -84,9 +84,16 @@ async def get_cupones(provincia: str, buscar: str = ""):
     return rows
 
 @app.get("/api/cupones/hoy")
-async def get_pagos_hoy():
+async def get_pagos_hoy(provincias: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    return supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre").execute().data
+    q = supabase.table("cupones").select("*").eq("fecha_pago", hoy)
+    # Si se pasan provincias, filtrar solo las del usuario
+    if provincias:
+        provs = [p.strip() for p in provincias.split(",") if p.strip()]
+        if provs:
+            filtro = ",".join(f"provincia.eq.{p}" for p in provs)
+            q = q.or_(filtro)
+    return fetch_all(q.order("nombre"))
 
 @app.get("/api/cupon/{cupon_id}")
 async def get_cupon(cupon_id: int):
@@ -393,9 +400,15 @@ async def get_balance(provincias: str):
     return resultado
 
 @app.get("/api/balance_diario")
-async def balance_diario():
-    hoy   = datetime.now().strftime("%Y-%m-%d")
-    pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
+async def balance_diario(provincias: str = ""):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    q = supabase.table("cupones").select("*").eq("fecha_pago", hoy)
+    if provincias:
+        provs = [p.strip() for p in provincias.split(",") if p.strip()]
+        if provs:
+            filtro = ",".join(f"provincia.eq.{p}" for p in provs)
+            q = q.or_(filtro)
+    pagos = fetch_all(q)
     clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
@@ -419,9 +432,15 @@ async def balance_diario():
     }
 
 @app.get("/api/balance_diario/txt")
-async def balance_diario_txt():
-    hoy   = datetime.now().strftime("%Y-%m-%d")
-    pagos = supabase.table("cupones").select("*").eq("fecha_pago", hoy).execute().data
+async def balance_diario_txt(provincias: str = ""):
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    q = supabase.table("cupones").select("*").eq("fecha_pago", hoy)
+    if provincias:
+        provs = [p.strip() for p in provincias.split(",") if p.strip()]
+        if provs:
+            filtro = ",".join(f"provincia.eq.{p}" for p in provs)
+            q = q.or_(filtro)
+    pagos = fetch_all(q)
     clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
