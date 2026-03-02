@@ -68,11 +68,12 @@ table.cupones tr:hover td{background:rgba(0,0,0,.03)}
 table.cupones tr.selected td{background:rgba(39,174,96,.12)}
 .row-verde td{background:rgba(39,174,96,.13)!important}
 .row-naranja td{background:rgba(230,126,34,.22)!important;color:#a04000;font-weight:600}
-.row-naranja td .badge-pend{background:rgba(230,126,34,.25);color:#a04000}
+/* VISTO: fila amarilla */
+.row-visto td{background:rgba(241,196,15,.25)!important}
 .badge-pagado{background:var(--verde-light);color:var(--verde);font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
 .badge-pend{background:rgba(231,76,60,.1);color:var(--rojo);font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+.badge-visto{background:rgba(241,196,15,.3);color:#b7950b;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
 .panel-der{background:var(--panel);border-left:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
-/* Visor PDF */
 .visor-pdf{background:#2c2c2c;height:240px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden;position:relative}
 .visor-pdf canvas{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}
 .visor-pdf .visor-msg{color:#aaa;font-size:13px}
@@ -117,6 +118,7 @@ input:checked+.slider::before{transform:translateX(20px)}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#ced4da;border-radius:3px}
 .empty-state{text-align:center;padding:40px;color:var(--muted);font-size:14px}
+.comentario-cell{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -153,7 +155,8 @@ input:checked+.slider::before{transform:translateX(20px)}
   </div>
   <div class="leyenda">
     <span class="dot-verde"></span> Guardado &nbsp;
-    <span class="dot-naranja"></span> Cuota vieja
+    <span class="dot-naranja"></span> Cuota vieja &nbsp;
+    🟡 Visto
   </div>
 </div>
 
@@ -186,7 +189,7 @@ input:checked+.slider::before{transform:translateX(20px)}
       <label class="switch"><input type="checkbox" id="sw-estado" onchange="toggleEstado()"><span class="slider"></span></label>
       <span class="switch-lbl pendiente" id="lbl-estado">PENDIENTE</span>
     </div>
-    <div class="field-group"><label>COMENTARIO</label><input id="e-com" type="text"></div>
+    <div class="field-group"><label>COMENTARIO / DETALLE PAGO</label><input id="e-com" type="text"></div>
     <div class="field-group">
       <label>MENSAJE WHATSAPP</label>
       <textarea id="e-msg">Hola! Le informamos que su cupon de pago Dental White esta disponible. Ante cualquier consulta no dude en contactarnos.</textarea>
@@ -207,12 +210,7 @@ input:checked+.slider::before{transform:translateX(20px)}
   </div>
 </div>
 
-<!-- PDF.js desde CDN -->
-
 <script>
-// Configurar worker de PDF.js
-
-
 let usuario='', provincias=[], tabActual='', cupones={}, currId=null;
 
 window.onload = () => {
@@ -241,22 +239,28 @@ function crearTabs() {
     const div = document.createElement('div');
     div.className = 'tab-content' + (i===0?' active':'');
     div.id = 'tab-'+p;
+
+    // PAGOS HOY tiene columnas extra: VISTO y COMENTARIO
+    const headersPagosHoy = `
+      <th>ID</th><th>N°</th><th>AFILIADO</th><th>MONTO</th>
+      <th>CTA</th><th>PROVINCIA</th><th>COMENTARIO</th><th>METODO</th><th>ESTADO</th>`;
+    const headersNormal = `
+      <th onclick="ordenarPor('${p}','id')">ID</th>
+      <th onclick="ordenarPor('${p}','cuenta')">N°</th>
+      <th onclick="ordenarPor('${p}','nombre')">AFILIADO</th>
+      <th onclick="ordenarPor('${p}','monto')">MONTO</th>
+      <th onclick="ordenarPor('${p}','cta')">CTA</th>
+      <th title="Cuotas pendientes">📋</th>
+      <th onclick="ordenarPor('${p}','fecha_cobro')">FECHA</th>
+      <th>ESTADO</th>`;
+
     div.innerHTML = `
       <div class="search-bar">
         <input class="search-input" placeholder="Buscar afiliado..." oninput="buscarEn('${p}',this.value)">
       </div>
       <div class="table-wrap">
         <table class="cupones">
-          <thead><tr>
-            <th onclick="ordenarPor('${p}','id')">ID</th>
-            <th onclick="ordenarPor('${p}','cuenta')">N°</th>
-            <th onclick="ordenarPor('${p}','nombre')">AFILIADO</th>
-            <th onclick="ordenarPor('${p}','monto')">MONTO</th>
-            <th onclick="ordenarPor('${p}','cta')">CTA</th>
-            <th title="Cuotas pendientes">📋</th>
-            <th onclick="ordenarPor('${p}','fecha_cobro')">FECHA</th>
-            <th>ESTADO</th>
-          </tr></thead>
+          <thead><tr>${p==='PAGOS HOY'?headersPagosHoy:headersNormal}</tr></thead>
           <tbody id="tbody-${p}"></tbody>
         </table>
       </div>`;
@@ -274,9 +278,13 @@ function activarTab(p) {
 }
 
 async function cargarTab(p, buscar='') {
-  const url = p==='PAGOS HOY'
-    ? '/api/cupones/hoy'
-    : `/api/cupones?provincia=${encodeURIComponent(p)}&buscar=${encodeURIComponent(buscar)}`;
+  let url;
+  if (p==='PAGOS HOY') {
+    // Filtrar por provincias del usuario (no general)
+    url = `/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`;
+  } else {
+    url = `/api/cupones?provincia=${encodeURIComponent(p)}&buscar=${encodeURIComponent(buscar)}`;
+  }
   const res = await fetch(url);
   const data = await res.json();
   cupones[p] = data;
@@ -289,25 +297,53 @@ function renderTabla(p, data) {
   if (!tbody) return;
   tbody.innerHTML = '';
   if (!data.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Sin registros</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Sin registros</td></tr>';
     return;
   }
-  data.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.className = r.color==='verde' ? 'row-verde' : r.color==='naranja' ? 'row-naranja' : '';
-    if (r.id===currId) tr.classList.add('selected');
-    tr.onclick = () => cargarDetalle(r.id);
-    const badge = r.estado==='PAGADO'
-      ? '<span class="badge-pagado">PAGADO</span>'
-      : '<span class="badge-pend">PENDIENTE</span>';
-    const cuotasCell = r.cuotas_pendientes > 1
-      ? `<td style="text-align:center"><span style="background:#e67e22;color:white;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:700">${r.cuotas_pendientes}</span></td>`
-      : `<td style="text-align:center;color:#aaa;font-size:11px">${r.cuotas_pendientes||''}</td>`;
-    tr.innerHTML = `<td>${r.id}</td><td>${r.cuenta||''}</td><td>${r.nombre||''}</td>
-      <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
-      <td>${r.cta||''}</td>${cuotasCell}<td>${r.fecha_cobro||''}</td><td>${badge}</td>`;
-    tbody.appendChild(tr);
-  });
+
+  if (p === 'PAGOS HOY') {
+    // Tabla de pagos hoy con comentario y visto
+    data.forEach(r => {
+      const tr = document.createElement('tr');
+      // Visto = fila amarilla
+      if (r.visto) tr.classList.add('row-visto');
+      if (r.id===currId) tr.classList.add('selected');
+      tr.onclick = () => cargarDetalle(r.id);
+      const vistoIcon = r.visto ? '✅' : '';
+      const badge = r.estado==='PAGADO'
+        ? `<span class="badge-pagado">PAGADO${r.visto?' 👁️':''}</span>`
+        : `<span class="badge-pend">PEND</span>`;
+      tr.innerHTML = `
+        <td>${r.id}</td>
+        <td>${r.cuenta||''}</td>
+        <td>${r.nombre||''}</td>
+        <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
+        <td>${r.cta||''}</td>
+        <td style="font-size:11px">${(r.provincia||'').substring(0,8)}</td>
+        <td class="comentario-cell" title="${r.comentario||''}">${r.comentario||''}</td>
+        <td style="font-size:11px">${r.medio_pago||''}</td>
+        <td>${badge}</td>`;
+      tbody.appendChild(tr);
+    });
+  } else {
+    // Tabla normal de provincia
+    data.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.className = r.color==='verde' ? 'row-verde' : r.color==='naranja' ? 'row-naranja' : '';
+      if (r.id===currId) tr.classList.add('selected');
+      tr.onclick = () => cargarDetalle(r.id);
+      const badge = r.estado==='PAGADO'
+        ? '<span class="badge-pagado">PAGADO</span>'
+        : '<span class="badge-pend">PENDIENTE</span>';
+      const cuotasCell = r.cuotas_pendientes > 1
+        ? `<td style="text-align:center"><span style="background:#e67e22;color:white;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:700">${r.cuotas_pendientes}</span></td>`
+        : `<td style="text-align:center;color:#aaa;font-size:11px">${r.cuotas_pendientes||''}</td>`;
+      tr.innerHTML = `<td>${r.id}</td><td>${r.cuenta||''}</td><td>${r.nombre||''}</td>
+        <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
+        <td>${r.cta||''}</td>${cuotasCell}<td>${r.fecha_cobro||''}</td><td>${badge}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
 }
 
 function buscarEn(p, val) { cargarTab(p, val); }
@@ -345,30 +381,39 @@ async function cargarDetalle(id) {
   const lbl = document.getElementById('lbl-estado');
   lbl.textContent = pagado?'PAGADO':'PENDIENTE';
   lbl.className = 'switch-lbl '+(pagado?'pagado':'pendiente');
-
-  // Renderizar visor
   renderizarVisor(r.img_path, r.id);
 }
 
-// ── VISOR IMAGEN (URL permanente de Supabase Storage) ──
-function renderizarVisor(imgPath) {
+// ── VISOR IMAGEN ──────────────────────────────────────
+function renderizarVisor(imgPath, cuponId) {
   const visor = document.getElementById('visor-pdf');
   visor.innerHTML = '';
-
-  if (!imgPath || !imgPath.startsWith('http')) {
+  if (!imgPath && !cuponId) {
     visor.innerHTML = '<span class="visor-msg">Sin imagen</span>';
     return;
   }
+  if (imgPath && imgPath.startsWith('http') && !imgPath.startsWith('REF|')) {
+    visor.innerHTML = '<span class="visor-loading">Cargando...</span>';
+    const img = document.createElement('img');
+    img.src = imgPath;
+    img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in';
+    img.onclick = () => window.open(imgPath, '_blank');
+    img.onload = () => { visor.innerHTML = ''; visor.appendChild(img); };
+    img.onerror = () => cargarImagenOnDemand(cuponId);
+    return;
+  }
+  if (cuponId) cargarImagenOnDemand(cuponId);
+  else visor.innerHTML = '<span class="visor-msg">Sin imagen</span>';
+}
 
-  visor.innerHTML = '<span class="visor-loading">Cargando...</span>';
+function cargarImagenOnDemand(cuponId) {
+  const visor = document.getElementById('visor-pdf');
+  if (!cuponId) { visor.innerHTML = '<span class="visor-msg">Sin imagen</span>'; return; }
+  visor.innerHTML = '<span class="visor-loading">Cargando imagen...</span>';
   const img = document.createElement('img');
-  img.src = imgPath;
-  img.style.maxWidth = '100%';
-  img.style.maxHeight = '100%';
-  img.style.objectFit = 'contain';
-  img.style.cursor = 'zoom-in';
-  img.title = 'Click para ampliar';
-  img.onclick = () => window.open(imgPath, '_blank');
+  img.src = `/api/imagen/${cuponId}?t=${Date.now()}`;
+  img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in';
+  img.onclick = () => window.open(img.src, '_blank');
   img.onload = () => { visor.innerHTML = ''; visor.appendChild(img); };
   img.onerror = () => { visor.innerHTML = '<span class="visor-msg">Sin imagen</span>'; };
 }
@@ -417,7 +462,7 @@ function enviarWA() {
   window.open(`https://wa.me/549${tel}?text=${msg}`, '_blank');
 }
 
-// ── BALANCE ───────────────────────────────────────────
+// ── BALANCE (solo provincias del usuario) ─────────────
 async function cargarBalance() {
   const provs = provincias.join(',');
   if (!provs) return;
@@ -429,12 +474,13 @@ async function cargarBalance() {
   data.forEach(d => {
     totalCobrado += d.cobrado;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><span class="prov-badge">${d.provincia.substring(0,6)}</span></td>
+    tr.innerHTML = `<td><span class="prov-badge">${d.provincia.substring(0,8)}</span></td>
       <td>${d.cant}</td>
       <td>$${(d.inicial||0).toLocaleString('es-AR')}</td>
       <td>$${(d.cobrado||0).toLocaleString('es-AR')}</td>`;
     tbody.appendChild(tr);
   });
+  // Caja del día = solo lo cobrado en las provincias del usuario
   document.getElementById('lbl-caja').textContent = '$'+totalCobrado.toLocaleString('es-AR');
 }
 
@@ -452,11 +498,9 @@ async function subirPDF(event) {
   const lbl  = document.getElementById('progress-lbl');
   fill.style.width = '3%';
   lbl.textContent = 'Enviando PDF...';
-
   const fd = new FormData();
   fd.append('provincia', tabActual);
   fd.append('archivo', file);
-
   let res;
   try {
     res = await fetch('/api/subir_pdf', {method:'POST', body:fd});
@@ -471,12 +515,10 @@ async function subirPDF(event) {
     return;
   }
   const {tarea_id} = await res.json();
-
   const interval = setInterval(async () => {
     try {
       const pr = await fetch(`/api/progreso/${tarea_id}`);
       const pd = await pr.json();
-
       if (pd.total > 0) {
         const pct = Math.round((pd.pagina / pd.total) * 100);
         fill.style.width = Math.max(5, pct) + '%';
@@ -485,7 +527,6 @@ async function subirPDF(event) {
         fill.style.width = '8%';
         lbl.textContent = 'Subiendo PDF al servidor...';
       }
-
       if (pd.estado === 'listo') {
         fill.style.width = '100%';
         const salt = pd.saltados ? ` (${pd.saltados} ya existian)` : '';
@@ -542,7 +583,7 @@ async function mostrarIniciarMes() {
     return `<tr><td>${d.provincia}</td><td>${d.clientes}</td><td>${d.cupones}</td><td>$${(d.monto||0).toLocaleString('es-AR')}</td></tr>`; }).join('');
   abrirModal(`
     <h2>📅 Balance Inicio de Mes</h2>
-    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Cupones PENDIENTES actuales (no se borra nada):</p>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Cupones PENDIENTES actuales:</p>
     <table class="modal-table">
       <thead><tr><th>Provincia</th><th>Clientes</th><th>Cupones</th><th>A Recaudar</th></tr></thead>
       <tbody>${rows}<tr style="font-weight:700"><td>TOTAL</td><td>${totCli}</td><td>${totCup}</td><td>$${totMon.toLocaleString('es-AR')}</td></tr></tbody>
@@ -587,11 +628,19 @@ async function confirmarCierre() {
   alert('✅ Cierre confirmado.');
 }
 
-// ── BALANCE DIARIO ────────────────────────────────────
+// ── BALANCE DIARIO (solo provincias del usuario) ──────
 async function mostrarBalanceDiario() {
-  const res = await fetch('/api/balance_diario');
+  const res = await fetch(`/api/balance_diario?provincias=${encodeURIComponent(provincias.join(','))}`);
   const d = await res.json();
-  let rows = d.clientes.map(c=>`<tr><td>${c.nombre}</td><td>${c.provincia}</td><td>${c.cuotas_str}</td><td>$${(c.total||0).toLocaleString('es-AR')}</td><td>${c.medio}</td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted);padding:10px">Sin pagos hoy</td></tr>';
+  let rows = d.clientes.map(c=>`
+    <tr>
+      <td>${c.nombre}</td>
+      <td style="font-size:11px">${c.provincia}</td>
+      <td>${c.cuotas_str}</td>
+      <td>$${(c.total||0).toLocaleString('es-AR')}</td>
+      <td style="font-size:11px">${c.medio}</td>
+      <td style="font-size:11px;color:var(--muted)">${c.comentario||''}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted);padding:10px">Sin pagos hoy</td></tr>';
   abrirModal(`
     <h2>📊 Balance Diario — ${d.fecha}</h2>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
@@ -599,7 +648,7 @@ async function mostrarBalanceDiario() {
         .map(([l,v,c])=>`<div style="background:#f8f9fa;border-radius:8px;padding:10px;text-align:center"><div style="font-size:10px;color:#6c757d;letter-spacing:1px">${l}</div><div style="font-size:18px;font-weight:700;color:${c}">${l==='CLIENTES'?v:'$'+Number(v).toLocaleString('es-AR')}</div></div>`).join('')}
     </div>
     <table class="modal-table">
-      <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Total</th><th>Metodo</th></tr></thead>
+      <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Total</th><th>Metodo</th><th>Comentario</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="modal-footer">
@@ -608,8 +657,16 @@ async function mostrarBalanceDiario() {
     </div>`);
 }
 
-function descargarBalanceTxt() { const a=document.createElement('a'); a.href='/api/balance_diario/txt'; a.click(); }
-function descargarCierreTxt() { const a=document.createElement('a'); a.href='/api/cierre/txt?provincias='+encodeURIComponent(provincias.join(',')); a.click(); }
+function descargarBalanceTxt() {
+  const a=document.createElement('a');
+  a.href='/api/balance_diario/txt?provincias='+encodeURIComponent(provincias.join(','));
+  a.click();
+}
+function descargarCierreTxt() {
+  const a=document.createElement('a');
+  a.href='/api/cierre/txt?provincias='+encodeURIComponent(provincias.join(','));
+  a.click();
+}
 </script>
 </body>
 </html>
