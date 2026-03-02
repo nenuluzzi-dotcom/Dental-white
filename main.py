@@ -358,20 +358,32 @@ async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...))
     return {"ok": True, "tarea_id": tarea_id}
 
 # ── BALANCE ─────────────────────────────────────────────
+def fetch_all(query):
+    """Trae TODAS las filas superando el limite de 1000 de Supabase."""
+    todas = []
+    offset = 0
+    while True:
+        res = query.range(offset, offset + 999).execute()
+        todas.extend(res.data)
+        if len(res.data) < 1000:
+            break
+        offset += 1000
+    return todas
+
 @app.get("/api/balance")
 async def get_balance(provincias: str):
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
-        res_all = supabase.table("cupones").select("cuenta,nombre").eq("provincia", p).execute()
+        res_all = fetch_all(supabase.table("cupones").select("cuenta,nombre").eq("provincia", p))
         claves  = set()
-        for r in res_all.data:
+        for r in res_all:
             claves.add(r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"])
-        res_pag = supabase.table("cupones").select("monto").eq("provincia", p).eq("estado", "PAGADO").execute()
-        cobrado = sum(r["monto"] or 0 for r in res_pag.data)
-        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
+        res_pag = fetch_all(supabase.table("cupones").select("monto").eq("provincia", p).eq("estado", "PAGADO"))
+        cobrado = sum(r["monto"] or 0 for r in res_pag)
+        res_pen = fetch_all(supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE"))
         por_cli = defaultdict(list)
-        for r in res_pen.data:
+        for r in res_pen:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             por_cli[clave].append(r["monto"] or 0)
         resultado.append({
