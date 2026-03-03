@@ -17,7 +17,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
-caja_reset_fecha = {}  # {usuario: fecha_reset}
+caja_reset_fecha = {}
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -88,15 +88,27 @@ async def get_cupones(provincia: str, buscar: str = ""):
 
 @app.get("/api/cupones/hoy")
 async def get_pagos_hoy(provincias: str = ""):
-    from datetime import timedelta
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
-    # Traer pagos de hoy Y ayer (por si pasó la medianoche)
+    # PAGOS HOY = estado PAGADO y visto=0 (sin revisar)
     todos = fetch_all(
         supabase.table("cupones").select("*")
-        .in_("fecha_pago", [hoy, ayer])
         .eq("estado", "PAGADO")
+        .eq("visto", 0)
         .order("nombre")
+    )
+    if provincias:
+        provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
+        if provs:
+            todos = [r for r in todos if (r.get("provincia") or "").upper() in provs]
+    return todos
+
+@app.get("/api/cupones/mes")
+async def get_pagos_mes(provincias: str = ""):
+    # PAGOS DEL MES = estado PAGADO y visto=1 (ya revisados)
+    todos = fetch_all(
+        supabase.table("cupones").select("*")
+        .eq("estado", "PAGADO")
+        .eq("visto", 1)
+        .order("fecha_pago")
     )
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
@@ -163,13 +175,9 @@ async def get_progreso(tarea_id: str):
         "img_ok": 0, "img_total": 0
     })
 
-# ── IMAGEN ON-DEMAND (renderiza 1 pagina al hacer click) ──
+# ── IMAGEN ON-DEMAND ────────────────────────────────────
 @app.get("/api/imagen/{cupon_id}")
 async def get_imagen_cupon(cupon_id: int):
-    """
-    Descarga el PDF de Supabase, renderiza SOLO la pagina del cupon
-    y devuelve el recorte como JPEG. Sin guardar nada en disco.
-    """
     import logging, httpx, gc
     log = logging.getLogger("uvicorn.error")
 
@@ -179,9 +187,7 @@ async def get_imagen_cupon(cupon_id: int):
 
     img_path = res.data[0]["img_path"]
 
-    # Formato: REF|url_pdf|page_idx|y0_ratio|y1_ratio
     if not img_path.startswith("REF|"):
-        # Es una URL directa de imagen vieja — redirigir
         from fastapi.responses import RedirectResponse
         return RedirectResponse(img_path)
 
@@ -192,15 +198,13 @@ async def get_imagen_cupon(cupon_id: int):
     y1r       = float(parts[4])
 
     try:
-        # Descargar PDF
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(pdf_url)
             pdf_bytes = r.content
 
-        # Renderizar UNA sola pagina con pypdfium2
         doc   = pdfium.PdfDocument(pdf_bytes)
         page  = doc[page_idx]
-        SCALE = 96 / 72  # DPI 96
+        SCALE = 96 / 72
         bm    = page.render(scale=SCALE)
         img   = bm.to_pil()
         iw, ih = img.size
@@ -208,7 +212,6 @@ async def get_imagen_cupon(cupon_id: int):
         del pdf_bytes, bm
         gc.collect()
 
-        # Recortar mitad derecha + franja vertical
         x0 = iw // 2
         y0 = max(0, int(ih * y0r))
         y1 = min(ih, int(ih * y1r))
@@ -238,7 +241,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
     KW  = ["DIRECCION","PROVINCIA","COBRO","PLAN","MONTO","CTA","TALON","RECUERDE"]
 
     try:
-        # Subir PDF a Storage UNA sola vez (para el visor)
         pdf_nombre = f"pdfs/{tarea_id}.pdf"
         pdf_url    = ""
         try:
@@ -251,7 +253,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
         except Exception as e:
             log.warning(f"[PDF] Storage fallo (continua sin imagen): {e}")
 
-        # Anti-duplicado en memoria
         existentes = set()
         res_ex = supabase.table("cupones").select("cuenta,cta").eq("provincia", prov).execute()
         for r in res_ex.data:
@@ -330,8 +331,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         continue
                     existentes.add(clave_dup)
 
-                    # img_path guarda referencia: URL_PDF|page_idx|y0_ratio|y1_ratio
-                    # El endpoint /api/imagen/{id} renderiza solo esa pagina al hacer click
                     if pdf_url:
                         y0r = round(y0 / ph, 4)
                         y1r = round(y1 / ph, 4)
@@ -375,7 +374,6 @@ async def subir_pdf(provincia: str = Form(...), archivo: UploadFile = File(...))
 
 # ── BALANCE ─────────────────────────────────────────────
 def fetch_all(query):
-    """Trae TODAS las filas superando el limite de 1000 de Supabase."""
     todas = []
     offset = 0
     while True:
@@ -411,12 +409,29 @@ async def get_balance(provincias: str):
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    # Todos los pagos de HOY (vistos y no vistos)
     pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
+
+    clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
+    for r in pagos:
+        key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+        clientes[key]["nombre"]     = r["nombre"] or ""
+        clientes[key]["cuenta"]     = r["cuenta"] or ""
+        clientes[key]["provincia"]  = r["provincia"] or ""
+        clientes[key]["medio"]      = r["medio_pago"] or ""
+        clientes[key]["comentario"] = r["comentario"] or ""
+        clientes[key]["total"]     += r["monto"] or 0
+        if r["cta"]: clientes[key]["cuotas"].append(str(r["cta"]))
+
+    tg  = sum(c["total"] for c in clientes.values())
+    tef = sum(c["total"] for c in clientes.values() if "EFECTIVO"  in (c["medio"] or "").upper())
+    ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
+    tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
+    tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
+
     return {
         "fecha": datetime.now(TZ_ARG).strftime("%d/%m/%Y"),
         "total_clientes": len(clientes), "total_general": tg,
@@ -427,7 +442,6 @@ async def balance_diario(provincias: str = ""):
 
 @app.post("/api/caja/reset")
 async def reset_caja(usuario: str = Form("")):
-    from datetime import timedelta
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     caja_reset_fecha[usuario or "global"] = hoy
     return {"ok": True, "fecha": hoy}
