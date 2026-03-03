@@ -68,7 +68,6 @@ table.cupones tr:hover td{background:rgba(0,0,0,.03)}
 table.cupones tr.selected td{background:rgba(39,174,96,.12)}
 .row-verde td{background:rgba(39,174,96,.13)!important}
 .row-naranja td{background:rgba(230,126,34,.22)!important;color:#a04000;font-weight:600}
-/* VISTO: fila amarilla */
 .row-visto td{background:rgba(241,196,15,.25)!important}
 .badge-pagado{background:var(--verde-light);color:var(--verde);font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
 .badge-pend{background:rgba(231,76,60,.1);color:var(--rojo);font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
@@ -228,11 +227,12 @@ function logout() { sessionStorage.clear(); window.location.href='/'; }
 function crearTabs() {
   const nav = document.getElementById('tabs-nav');
   const body = document.getElementById('tabs-body');
-  const allTabs = ['PAGOS HOY', ...provincias];
+  // CAMBIO 1: agregado 'PAGOS DEL MES'
+  const allTabs = ['PAGOS HOY', 'PAGOS DEL MES', ...provincias];
   allTabs.forEach((p, i) => {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (i===0?' active':'');
-    btn.textContent = p==='PAGOS HOY' ? '✅ PAGOS HOY' : p;
+    btn.textContent = p==='PAGOS HOY' ? '✅ PAGOS HOY' : p==='PAGOS DEL MES' ? '📁 PAGOS DEL MES' : p;
     btn.dataset.tab = p;
     btn.onclick = () => activarTab(p);
     nav.appendChild(btn);
@@ -240,8 +240,7 @@ function crearTabs() {
     div.className = 'tab-content' + (i===0?' active':'');
     div.id = 'tab-'+p;
 
-    // PAGOS HOY tiene columnas extra: VISTO y COMENTARIO
-    const headersPagosHoy = `
+    const headersPagosEspecial = `
       <th>ID</th><th>AFILIADO (N° incluido)</th><th>MONTO</th>
       <th>CTA</th><th>PROVINCIA</th><th>COMENTARIO</th><th>METODO</th><th>ESTADO</th>`;
     const headersNormal = `
@@ -254,13 +253,14 @@ function crearTabs() {
       <th onclick="ordenarPor('${p}','fecha_cobro')">FECHA</th>
       <th>ESTADO</th>`;
 
+    const esEspecial = (p==='PAGOS HOY' || p==='PAGOS DEL MES');
     div.innerHTML = `
       <div class="search-bar">
         <input class="search-input" placeholder="Buscar afiliado..." oninput="buscarEn('${p}',this.value)">
       </div>
       <div class="table-wrap">
         <table class="cupones">
-          <thead><tr>${p==='PAGOS HOY'?headersPagosHoy:headersNormal}</tr></thead>
+          <thead><tr>${esEspecial ? headersPagosEspecial : headersNormal}</tr></thead>
           <tbody id="tbody-${p}"></tbody>
         </table>
       </div>`;
@@ -280,8 +280,10 @@ function activarTab(p) {
 async function cargarTab(p, buscar='') {
   let url;
   if (p==='PAGOS HOY') {
-    // Filtrar por provincias del usuario (no general)
     url = `/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`;
+  } else if (p==='PAGOS DEL MES') {
+    // CAMBIO 2: nueva pestaña apunta a /api/cupones/mes
+    url = `/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`;
   } else {
     url = `/api/cupones?provincia=${encodeURIComponent(p)}&buscar=${encodeURIComponent(buscar)}`;
   }
@@ -301,15 +303,12 @@ function renderTabla(p, data) {
     return;
   }
 
-  if (p === 'PAGOS HOY') {
-    // Tabla de pagos hoy con comentario y visto
+  if (p === 'PAGOS HOY' || p === 'PAGOS DEL MES') {
     data.forEach(r => {
       const tr = document.createElement('tr');
-      // Visto = fila amarilla
       if (r.visto) tr.classList.add('row-visto');
       if (r.id===currId) tr.classList.add('selected');
       tr.onclick = () => cargarDetalle(r.id);
-      const vistoIcon = r.visto ? '✅' : '';
       const badge = r.estado==='PAGADO'
         ? `<span class="badge-pagado">PAGADO${r.visto?' 👁️':''}</span>`
         : `<span class="badge-pend">PEND</span>`;
@@ -326,7 +325,6 @@ function renderTabla(p, data) {
       tbody.appendChild(tr);
     });
   } else {
-    // Tabla normal de provincia
     data.forEach(r => {
       const tr = document.createElement('tr');
       tr.className = r.color==='verde' ? 'row-verde' : r.color==='naranja' ? 'row-naranja' : '';
@@ -438,7 +436,12 @@ async function registrarPago() {
 async function marcarVisto() {
   if (!currId) return;
   await fetch(`/api/cupon/${currId}/visto`, {method:'POST'});
-  cargarTab(tabActual);
+  // Refrescar ambas pestañas para que el registro se mueva
+  cargarTab('PAGOS HOY');
+  cargarTab('PAGOS DEL MES');
+  if (tabActual !== 'PAGOS HOY' && tabActual !== 'PAGOS DEL MES') {
+    cargarTab(tabActual);
+  }
 }
 
 async function guardarCambios() {
@@ -462,7 +465,7 @@ function enviarWA() {
   window.open(`https://wa.me/549${tel}?text=${msg}`, '_blank');
 }
 
-// ── BALANCE (solo provincias del usuario) ─────────────
+// ── BALANCE ───────────────────────────────────────────
 async function cargarBalance() {
   const provs = provincias.join(',');
   if (!provs) return;
@@ -480,13 +483,12 @@ async function cargarBalance() {
       <td>$${(d.cobrado||0).toLocaleString('es-AR')}</td>`;
     tbody.appendChild(tr);
   });
-  // Caja del día = solo lo cobrado en las provincias del usuario
   document.getElementById('lbl-caja').textContent = '$'+totalCobrado.toLocaleString('es-AR');
 }
 
 // ── SUBIR PDF ─────────────────────────────────────────
 function clickSubirPDF() {
-  if (!tabActual || tabActual==='PAGOS HOY') return alert('Selecciona una provincia primero');
+  if (!tabActual || tabActual==='PAGOS HOY' || tabActual==='PAGOS DEL MES') return alert('Selecciona una provincia primero');
   document.getElementById('input-pdf').click();
 }
 
@@ -546,7 +548,7 @@ async function subirPDF(event) {
 
 // ── MANUAL ────────────────────────────────────────────
 async function agregarManual() {
-  if (!tabActual || tabActual==='PAGOS HOY') return alert('Selecciona una provincia primero');
+  if (!tabActual || tabActual==='PAGOS HOY' || tabActual==='PAGOS DEL MES') return alert('Selecciona una provincia primero');
   const fd = new FormData();
   fd.append('provincia', tabActual);
   await fetch('/api/cupon/agregar', {method:'POST',body:fd});
@@ -620,15 +622,17 @@ async function confirmarCierre() {
   const fd = new FormData();
   fd.append('provincias', provincias.join(','));
   await fetch('/api/cierre/confirmar', {method:'POST',body:fd});
+  // CAMBIO 3: al confirmar cierre, la caja vuelve a $0
+  document.getElementById('lbl-caja').textContent = '$0';
   cerrarModal();
   currId = null;
   document.getElementById('visor-pdf').innerHTML = '<span class="visor-msg">Sin imagen</span>';
   cargarTab(tabActual);
   cargarBalance();
-  alert('✅ Cierre confirmado.');
+  alert('✅ Cierre confirmado. Caja en $0.');
 }
 
-// ── BALANCE DIARIO (solo provincias del usuario) ──────
+// ── BALANCE DIARIO ────────────────────────────────────
 async function mostrarBalanceDiario() {
   const res = await fetch(`/api/balance_diario?provincias=${encodeURIComponent(provincias.join(','))}`);
   const d = await res.json();
@@ -654,18 +658,7 @@ async function mostrarBalanceDiario() {
     <div class="modal-footer">
       <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
       <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarBalanceTxt()">💾 Guardar .txt</button>
-      <button class="btn-modal" style="background:#e74c3c;color:white" onclick="cerrarCaja()">🔄 Cerrar Caja del Día</button>
     </div>`);
-}
-
-async function cerrarCaja() {
-  if (!confirm('¿Confirmar cierre de caja? La caja del día vuelve a $0.')) return;
-  const fd = new FormData();
-  fd.append('usuario', usuario);
-  await fetch('/api/caja/reset', {method:'POST', body:fd});
-  cerrarModal();
-  document.getElementById('lbl-caja').textContent = '$0';
-  alert('✅ Caja cerrada. Ya podés empezar el nuevo día.');
 }
 
 function descargarBalanceTxt() {
