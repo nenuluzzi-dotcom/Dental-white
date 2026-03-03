@@ -410,29 +410,13 @@ async def get_balance(provincias: str):
 
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
-    from datetime import timedelta
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").in_("fecha_pago", [hoy, ayer]).eq("estado","PAGADO"))
+    # Todos los pagos de HOY (vistos y no vistos)
+    pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
-    clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
-    for r in pagos:
-        key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-        clientes[key]["nombre"]     = r["nombre"] or ""
-        clientes[key]["cuenta"]     = r["cuenta"] or ""
-        clientes[key]["provincia"]  = r["provincia"] or ""
-        clientes[key]["medio"]      = r["medio_pago"] or ""
-        clientes[key]["comentario"] = r["comentario"] or ""
-        clientes[key]["total"]     += r["monto"] or 0
-        if r["cta"]: clientes[key]["cuotas"].append(str(r["cta"]))
-    tg  = sum(c["total"] for c in clientes.values())
-    tef = sum(c["total"] for c in clientes.values() if "EFECTIVO"  in (c["medio"] or "").upper())
-    ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
-    tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
-    tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     return {
         "fecha": datetime.now(TZ_ARG).strftime("%d/%m/%Y"),
         "total_clientes": len(clientes), "total_general": tg,
