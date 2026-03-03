@@ -634,7 +634,7 @@ async function mostrarBalanceDiario() {
   const d = await res.json();
   let rows = d.clientes.map(c=>`
     <tr>
-      <td>${c.nombre}</td>
+      <td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td>
       <td style="font-size:11px">${c.provincia}</td>
       <td>${c.cuotas_str}</td>
       <td>$${(c.total||0).toLocaleString('es-AR')}</td>
@@ -654,7 +654,18 @@ async function mostrarBalanceDiario() {
     <div class="modal-footer">
       <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
       <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarBalanceTxt()">💾 Guardar .txt</button>
+      <button class="btn-modal" style="background:#e74c3c;color:white" onclick="cerrarCaja()">🔄 Cerrar Caja del Día</button>
     </div>`);
+}
+
+async function cerrarCaja() {
+  if (!confirm('¿Confirmar cierre de caja? La caja del día vuelve a $0.')) return;
+  const fd = new FormData();
+  fd.append('usuario', usuario);
+  await fetch('/api/caja/reset', {method:'POST', body:fd});
+  cerrarModal();
+  document.getElementById('lbl-caja').textContent = '$0';
+  alert('✅ Caja cerrada. Ya podés empezar el nuevo día.');
 }
 
 function descargarBalanceTxt() {
