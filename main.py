@@ -1,5 +1,7 @@
 import os, re, uuid, io, threading
 from datetime import datetime
+from zoneinfo import ZoneInfo
+TZ_ARG = ZoneInfo('America/Argentina/Buenos_Aires')
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -57,7 +59,7 @@ def _borrar_img(img_path: str):
 # ── CUPONES ─────────────────────────────────────────────
 @app.get("/api/cupones")
 async def get_cupones(provincia: str, buscar: str = ""):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     q = supabase.table("cupones").select("*")\
         .or_(f"estado.eq.PENDIENTE,fecha_pago.eq.{hoy}")\
         .eq("provincia", provincia)
@@ -85,7 +87,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
 
 @app.get("/api/cupones/hoy")
 async def get_pagos_hoy(provincias: str = ""):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     todos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre"))
     # Filtrar por provincias del usuario si se pasan
     if provincias:
@@ -103,7 +105,7 @@ async def get_cupon(cupon_id: int):
 
 @app.post("/api/cupon/{cupon_id}/pago")
 async def registrar_pago(cupon_id: int, medio_pago: str = Form(...), comentario: str = Form("")):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     supabase.table("cupones").update({
         "estado": "PAGADO", "fecha_pago": hoy,
         "medio_pago": medio_pago, "comentario": comentario, "listo": True
@@ -400,7 +402,7 @@ async def get_balance(provincias: str):
 
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
@@ -421,7 +423,7 @@ async def balance_diario(provincias: str = ""):
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
     return {
-        "fecha": datetime.now().strftime("%d/%m/%Y"),
+        "fecha": datetime.now(TZ_ARG).strftime("%d/%m/%Y"),
         "total_clientes": len(clientes), "total_general": tg,
         "total_efectivo": tef, "total_transfer": ttr, "total_mp": tmp, "total_tarjeta": tta,
         "clientes": [{**v,"key":k,"cuotas_str":", ".join(v["cuotas"]),"multi":len(v["cuotas"])>1}
@@ -430,7 +432,7 @@ async def balance_diario(provincias: str = ""):
 
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt(provincias: str = ""):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
@@ -450,7 +452,7 @@ async def balance_diario_txt(provincias: str = ""):
     ttr = sum(c["total"] for c in clientes.values() if "TRANSFER"  in (c["medio"] or "").upper())
     tmp = sum(c["total"] for c in clientes.values() if "MERCADO"   in (c["medio"] or "").upper())
     tta = sum(c["total"] for c in clientes.values() if "TARJETA"   in (c["medio"] or "").upper())
-    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha_fmt = datetime.now(TZ_ARG).strftime("%d/%m/%Y %H:%M")
     lineas = ["="*50,"     DENTAL WHITE - BALANCE DIARIO",f"     {fecha_fmt}","="*50,""]
     prov_act = ""
     for k,c in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"])):
@@ -467,12 +469,12 @@ async def balance_diario_txt(provincias: str = ""):
     if tmp: lineas.append(f"  Mercado Pago:   $ {tmp:>10,.0f}")
     if tta: lineas.append(f"  Tarjeta:        $ {tta:>10,.0f}")
     lineas.append("="*50)
-    nombre = f"balance_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    nombre = f"balance_{datetime.now(TZ_ARG).strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
 @app.get("/api/cierre")
 async def cierre(provincias: str):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
@@ -497,7 +499,7 @@ async def cierre(provincias: str):
 
 @app.get("/api/cierre/txt")
 async def cierre_txt(provincias: str):
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
@@ -518,7 +520,7 @@ async def cierre_txt(provincias: str):
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
         metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
-    fecha_fmt = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha_fmt = datetime.now(TZ_ARG).strftime("%d/%m/%Y %H:%M")
     lineas = ["="*50,"     DENTAL WHITE - CIERRE DEL DIA",f"     {fecha_fmt}","="*50]
     tc, tp = 0, 0
     for r in resultado:
@@ -532,7 +534,7 @@ async def cierre_txt(provincias: str):
     for m,v in metodos.items():
         lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
     lineas.append("="*50)
-    nombre = f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    nombre = f"cierre_{datetime.now(TZ_ARG).strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
 @app.post("/api/cierre/confirmar")
