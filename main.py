@@ -17,6 +17,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
+caja_reset_fecha = {}  # {usuario: fecha_reset}
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -87,9 +88,16 @@ async def get_cupones(provincia: str, buscar: str = ""):
 
 @app.get("/api/cupones/hoy")
 async def get_pagos_hoy(provincias: str = ""):
+    from datetime import timedelta
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    todos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre"))
-    # Filtrar por provincias del usuario si se pasan
+    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Traer pagos de hoy Y ayer (por si pasó la medianoche)
+    todos = fetch_all(
+        supabase.table("cupones").select("*")
+        .in_("fecha_pago", [hoy, ayer])
+        .eq("estado", "PAGADO")
+        .order("nombre")
+    )
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
@@ -402,16 +410,19 @@ async def get_balance(provincias: str):
 
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
+    from datetime import timedelta
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
+    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
+    pagos = fetch_all(supabase.table("cupones").select("*").in_("fecha_pago", [hoy, ayer]).eq("estado","PAGADO"))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
-    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
+    clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
+        clientes[key]["cuenta"]     = r["cuenta"] or ""
         clientes[key]["provincia"]  = r["provincia"] or ""
         clientes[key]["medio"]      = r["medio_pago"] or ""
         clientes[key]["comentario"] = r["comentario"] or ""
@@ -430,18 +441,28 @@ async def balance_diario(provincias: str = ""):
                      for k,v in sorted(clientes.items(), key=lambda x:(x[1]["provincia"],x[1]["nombre"]))]
     }
 
+@app.post("/api/caja/reset")
+async def reset_caja(usuario: str = Form("")):
+    from datetime import timedelta
+    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
+    caja_reset_fecha[usuario or "global"] = hoy
+    return {"ok": True, "fecha": hoy}
+
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt(provincias: str = ""):
+    from datetime import timedelta
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
+    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
+    pagos = fetch_all(supabase.table("cupones").select("*").in_("fecha_pago", [hoy, ayer]).eq("estado","PAGADO"))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
-    clientes = defaultdict(lambda: {"nombre":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
+    clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
         clientes[key]["nombre"]     = r["nombre"] or ""
+        clientes[key]["cuenta"]     = r["cuenta"] or ""
         clientes[key]["provincia"]  = r["provincia"] or ""
         clientes[key]["medio"]      = r["medio_pago"] or ""
         clientes[key]["comentario"] = r["comentario"] or ""
