@@ -86,7 +86,7 @@ async def get_cupones(provincia: str, buscar: str = ""):
 @app.get("/api/cupones/hoy")
 async def get_pagos_hoy(provincias: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    todos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pagos", hoy).order("nombre"))
+    todos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy).order("nombre"))
     # Filtrar por provincias del usuario si se pasan
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
@@ -105,7 +105,7 @@ async def get_cupon(cupon_id: int):
 async def registrar_pago(cupon_id: int, medio_pago: str = Form(...), comentario: str = Form("")):
     hoy = datetime.now().strftime("%Y-%m-%d")
     supabase.table("cupones").update({
-        "estado": "PAGADO", "fecha_pagos": hoy,
+        "estado": "PAGADO", "fecha_pago": hoy,
         "medio_pago": medio_pago, "comentario": comentario, "listo": True
     }).eq("id", cupon_id).execute()
     return {"ok": True}
@@ -401,7 +401,7 @@ async def get_balance(provincias: str):
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pagos", hoy))
+    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
@@ -431,7 +431,7 @@ async def balance_diario(provincias: str = ""):
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt(provincias: str = ""):
     hoy = datetime.now().strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pagos", hoy))
+    pagos = fetch_all(supabase.table("cupones").select("*").eq("fecha_pago", hoy))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
@@ -476,7 +476,7 @@ async def cierre(provincias: str):
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
-        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pagos", hoy).execute()
+        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
         cobrado = sum(r["monto"] or 0 for r in res_cob.data)
         res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
         por_cli = defaultdict(list)
@@ -488,7 +488,7 @@ async def cierre(provincias: str):
             "pendiente_cant": len(por_cli),
             "pendiente_monto": sum(min(v) for v in por_cli.values())
         })
-    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pagos", hoy).execute()
+    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
@@ -501,7 +501,7 @@ async def cierre_txt(provincias: str):
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
-        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pagos", hoy).execute()
+        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
         cobrado = sum(r["monto"] or 0 for r in res_cob.data)
         res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
         por_cli = defaultdict(list)
@@ -513,7 +513,7 @@ async def cierre_txt(provincias: str):
             "pendiente_cant": len(por_cli),
             "pendiente_monto": sum(min(v) for v in por_cli.values())
         })
-    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pagos", hoy).execute()
+    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
     metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
     for r in res_met.data:
         m = r["medio_pago"] or "SIN METODO"
