@@ -242,7 +242,7 @@ function crearTabs() {
 
     // PAGOS HOY tiene columnas extra: VISTO y COMENTARIO
     const headersPagosHoy = `
-      <th>ID</th><th>N°</th><th>AFILIADO</th><th>MONTO</th>
+      <th>ID</th><th>AFILIADO (N° incluido)</th><th>MONTO</th>
       <th>CTA</th><th>PROVINCIA</th><th>COMENTARIO</th><th>METODO</th><th>ESTADO</th>`;
     const headersNormal = `
       <th onclick="ordenarPor('${p}','id')">ID</th>
@@ -313,10 +313,10 @@ function renderTabla(p, data) {
       const badge = r.estado==='PAGADO'
         ? `<span class="badge-pagado">PAGADO${r.visto?' 👁️':''}</span>`
         : `<span class="badge-pend">PEND</span>`;
+      const nro = r.cuenta && r.cuenta!=='S/D' ? `<span style="font-size:10px;color:#888;margin-right:4px">N°${r.cuenta}</span>` : '';
       tr.innerHTML = `
         <td>${r.id}</td>
-        <td>${r.cuenta||''}</td>
-        <td>${r.nombre||''}</td>
+        <td>${nro}<strong>${r.nombre||''}</strong></td>
         <td>$${(r.monto||0).toLocaleString('es-AR')}</td>
         <td>${r.cta||''}</td>
         <td style="font-size:11px">${(r.provincia||'').substring(0,8)}</td>
