@@ -30,6 +30,16 @@ PROVINCIAS = {
 
 progreso_tareas = {}
 
+def get_ultimo_reset():
+    """Obtiene el timestamp del último reset de caja desde Supabase."""
+    try:
+        res = supabase.table("config").select("valor").eq("clave", "ultimo_reset").execute()
+        if res.data:
+            return res.data[0]["valor"]
+    except:
+        pass
+    return None
+
 # ── LOGIN ───────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def login(request: Request):
@@ -126,9 +136,11 @@ async def get_cupon(cupon_id: int):
 @app.post("/api/cupon/{cupon_id}/pago")
 async def registrar_pago(cupon_id: int, medio_pago: str = Form(...), comentario: str = Form("")):
     hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
+    ahora = datetime.now(TZ_ARG).isoformat()  # timestamp exacto del pago
     supabase.table("cupones").update({
         "estado": "PAGADO", "fecha_pago": hoy,
-        "medio_pago": medio_pago, "comentario": comentario, "listo": True
+        "medio_pago": medio_pago, "comentario": comentario,
+        "listo": True, "pagado_en": ahora
     }).eq("id", cupon_id).execute()
     return {"ok": True}
 
@@ -406,14 +418,31 @@ async def get_balance(provincias: str):
         })
     return resultado
 
-@app.get("/api/balance_diario")
-async def balance_diario(provincias: str = ""):
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO").eq("fecha_pago", hoy))
+@app.get("/api/caja_total")
+async def caja_total(provincias: str = ""):
+    """Suma de pagos desde el último reset de caja."""
+    ultimo_reset = get_ultimo_reset()
+    pagos = fetch_all(supabase.table("cupones").select("monto,provincia,pagado_en").eq("estado", "PAGADO"))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
+    if ultimo_reset:
+        pagos = [r for r in pagos if r.get("pagado_en") and r["pagado_en"] >= ultimo_reset]
+    total = sum(r["monto"] or 0 for r in pagos)
+    return {"total": total, "ultimo_reset": ultimo_reset}
+
+@app.get("/api/balance_diario")
+async def balance_diario(provincias: str = ""):
+    ultimo_reset = get_ultimo_reset()
+    pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO"))
+    if provincias:
+        provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
+        if provs:
+            pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
+    # Filtrar solo desde el último reset
+    if ultimo_reset:
+        pagos = [r for r in pagos if r.get("pagado_en") and r["pagado_en"] >= ultimo_reset]
 
     clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
@@ -442,20 +471,23 @@ async def balance_diario(provincias: str = ""):
 
 @app.post("/api/caja/reset")
 async def reset_caja(usuario: str = Form("")):
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    caja_reset_fecha[usuario or "global"] = hoy
-    return {"ok": True, "fecha": hoy}
+    ahora = datetime.now(TZ_ARG).isoformat()
+    # Guardar en Supabase para que sobreviva reinicios del servidor
+    supabase.table("config").upsert({"clave": "ultimo_reset", "valor": ahora}).execute()
+    caja_reset_fecha[usuario or "global"] = ahora
+    return {"ok": True, "fecha": ahora}
 
 @app.get("/api/balance_diario/txt")
 async def balance_diario_txt(provincias: str = ""):
-    from datetime import timedelta
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    ayer = (datetime.now(TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
-    pagos = fetch_all(supabase.table("cupones").select("*").in_("fecha_pago", [hoy, ayer]).eq("estado","PAGADO"))
+    ultimo_reset = get_ultimo_reset()
+    pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO"))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
+    if ultimo_reset:
+        pagos = [r for r in pagos if r.get("pagado_en") and r["pagado_en"] >= ultimo_reset]
+
     clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
         key = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
