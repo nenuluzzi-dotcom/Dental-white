@@ -422,27 +422,28 @@ async def get_balance(provincias: str):
 async def caja_total(provincias: str = ""):
     """Suma de pagos desde el último reset de caja."""
     ultimo_reset = get_ultimo_reset()
-    pagos = fetch_all(supabase.table("cupones").select("monto,provincia,pagado_en").eq("estado", "PAGADO"))
+    if not ultimo_reset:
+        return {"total": 0, "ultimo_reset": None}
+    q = supabase.table("cupones").select("monto,provincia").eq("estado", "PAGADO").gte("pagado_en", ultimo_reset)
+    pagos = fetch_all(q)
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
-    if ultimo_reset:
-        pagos = [r for r in pagos if r.get("pagado_en") and r["pagado_en"] >= ultimo_reset]
     total = sum(r["monto"] or 0 for r in pagos)
     return {"total": total, "ultimo_reset": ultimo_reset}
 
 @app.get("/api/balance_diario")
 async def balance_diario(provincias: str = ""):
     ultimo_reset = get_ultimo_reset()
-    pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO"))
+    if not ultimo_reset:
+        pagos = []
+    else:
+        pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO").gte("pagado_en", ultimo_reset))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
         if provs:
             pagos = [r for r in pagos if (r.get("provincia") or "").upper() in provs]
-    # Filtrar solo desde el último reset
-    if ultimo_reset:
-        pagos = [r for r in pagos if r.get("pagado_en") and r["pagado_en"] >= ultimo_reset]
 
     clientes = defaultdict(lambda: {"nombre":"","cuenta":"","cuotas":[],"total":0.0,"medio":"","comentario":"","provincia":""})
     for r in pagos:
