@@ -469,13 +469,12 @@ function enviarWA() {
 async function cargarBalance() {
   const provs = provincias.join(',');
   if (!provs) return;
+  // Tabla de balance por provincia
   const res = await fetch(`/api/balance?provincias=${encodeURIComponent(provs)}`);
   const data = await res.json();
   const tbody = document.querySelector('#tabla-balance tbody');
   tbody.innerHTML = '';
-  let totalCobrado = 0;
   data.forEach(d => {
-    totalCobrado += d.cobrado;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><span class="prov-badge">${d.provincia.substring(0,8)}</span></td>
       <td>${d.cant}</td>
@@ -483,7 +482,10 @@ async function cargarBalance() {
       <td>$${(d.cobrado||0).toLocaleString('es-AR')}</td>`;
     tbody.appendChild(tr);
   });
-  document.getElementById('lbl-caja').textContent = '$'+totalCobrado.toLocaleString('es-AR');
+  // Caja del día: solo suma desde el último reset
+  const resCaja = await fetch(`/api/caja_total?provincias=${encodeURIComponent(provs)}`);
+  const caja = await resCaja.json();
+  document.getElementById('lbl-caja').textContent = '$' + (caja.total||0).toLocaleString('es-AR');
 }
 
 // ── SUBIR PDF ─────────────────────────────────────────
