@@ -344,7 +344,21 @@ function renderTabla(p, data) {
   }
 }
 
-function buscarEn(p, val) { cargarTab(p, val); }
+function buscarEn(p, val) {
+  if (p === 'PAGOS HOY' || p === 'PAGOS DEL MES') {
+    // Filtrar en memoria por nombre o cuenta (parcial, sin importar mayúsculas)
+    if (!cupones[p]) return;
+    const q = val.trim().toLowerCase();
+    const filtrado = q
+      ? cupones[p].filter(r =>
+          (r.nombre || '').toLowerCase().includes(q) ||
+          (r.cuenta || '').toLowerCase().includes(q))
+      : cupones[p];
+    renderTabla(p, filtrado);
+  } else {
+    cargarTab(p, val);
+  }
+}
 
 function ordenarPor(p, campo) {
   if (!cupones[p]) return;
@@ -483,7 +497,7 @@ async function cargarBalance() {
     tbody.appendChild(tr);
   });
   // Caja del día: solo suma desde el último reset
-  const resCaja = await fetch(`/api/caja_total?provincias=${encodeURIComponent(provs)}`);
+  const resCaja = await fetch(`/api/caja_total?provincias=${encodeURIComponent(provs)}&usuario=${encodeURIComponent(usuario)}`);
   const caja = await resCaja.json();
   document.getElementById('lbl-caja').textContent = '$' + (caja.total||0).toLocaleString('es-AR');
 }
@@ -676,7 +690,7 @@ async function cerrarCaja() {
 
 function descargarBalanceTxt() {
   const a=document.createElement('a');
-  a.href='/api/balance_diario/txt?provincias='+encodeURIComponent(provincias.join(','));
+  a.href='/api/balance_diario/txt?provincias='+encodeURIComponent(provincias.join(','))+'&usuario='+encodeURIComponent(usuario);
   a.click();
 }
 function descargarCierreTxt() {
