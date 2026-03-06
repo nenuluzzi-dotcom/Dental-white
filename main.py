@@ -30,12 +30,17 @@ PROVINCIAS = {
 
 progreso_tareas = {}
 
-def get_ultimo_reset():
-    """Obtiene el timestamp del último reset de caja desde Supabase."""
+def get_ultimo_reset(usuario: str = ""):
+    """Obtiene el timestamp del último reset de caja por usuario."""
     try:
-        res = supabase.table("config").select("valor").eq("clave", "ultimo_reset").execute()
+        clave = f"ultimo_reset_{usuario.upper()}" if usuario else "ultimo_reset"
+        res = supabase.table("config").select("valor").eq("clave", clave).execute()
         if res.data:
             return res.data[0]["valor"]
+        # Fallback al reset global
+        res2 = supabase.table("config").select("valor").eq("clave", "ultimo_reset").execute()
+        if res2.data:
+            return res2.data[0]["valor"]
     except:
         pass
     return None
@@ -419,9 +424,9 @@ async def get_balance(provincias: str):
     return resultado
 
 @app.get("/api/caja_total")
-async def caja_total(provincias: str = ""):
-    """Suma de pagos desde el último reset de caja."""
-    ultimo_reset = get_ultimo_reset()
+async def caja_total(provincias: str = "", usuario: str = ""):
+    """Suma de pagos desde el último reset de caja por usuario."""
+    ultimo_reset = get_ultimo_reset(usuario)
     if not ultimo_reset:
         return {"total": 0, "ultimo_reset": None}
     q = supabase.table("cupones").select("monto,provincia").eq("estado", "PAGADO").gte("pagado_en", ultimo_reset)
@@ -434,8 +439,8 @@ async def caja_total(provincias: str = ""):
     return {"total": total, "ultimo_reset": ultimo_reset}
 
 @app.get("/api/balance_diario")
-async def balance_diario(provincias: str = ""):
-    ultimo_reset = get_ultimo_reset()
+async def balance_diario(provincias: str = "", usuario: str = ""):
+    ultimo_reset = get_ultimo_reset(usuario)
     if not ultimo_reset:
         pagos = []
     else:
@@ -473,14 +478,14 @@ async def balance_diario(provincias: str = ""):
 @app.post("/api/caja/reset")
 async def reset_caja(usuario: str = Form("")):
     ahora = datetime.now(TZ_ARG).isoformat()
-    # Guardar en Supabase para que sobreviva reinicios del servidor
-    supabase.table("config").upsert({"clave": "ultimo_reset", "valor": ahora}).execute()
+    clave = f"ultimo_reset_{usuario.upper()}" if usuario else "ultimo_reset"
+    supabase.table("config").upsert({"clave": clave, "valor": ahora}).execute()
     caja_reset_fecha[usuario or "global"] = ahora
     return {"ok": True, "fecha": ahora}
 
 @app.get("/api/balance_diario/txt")
-async def balance_diario_txt(provincias: str = ""):
-    ultimo_reset = get_ultimo_reset()
+async def balance_diario_txt(provincias: str = "", usuario: str = ""):
+    ultimo_reset = get_ultimo_reset(usuario)
     pagos = fetch_all(supabase.table("cupones").select("*").eq("estado","PAGADO"))
     if provincias:
         provs = [p.strip().upper() for p in provincias.split(",") if p.strip()]
