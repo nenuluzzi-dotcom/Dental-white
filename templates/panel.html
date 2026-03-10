@@ -151,6 +151,7 @@ input:checked+.slider::before{transform:translateX(20px)}
     <button class="btn-panel btn-gris" onclick="mostrarCierre()">📝 CIERRE</button>
     <button class="btn-panel btn-rojo" onclick="eliminarCupon()">❌ ELIMINAR</button>
     <button class="btn-panel btn-naranja" onclick="mostrarBalanceDiario()">📊 BALANCE DIARIO</button>
+    <button class="btn-panel btn-rojo" onclick="mostrarDeudores()">⚠️ 2+ CUOTAS PENDIENTES</button>
   </div>
   <div class="leyenda">
     <span class="dot-verde"></span> Guardado &nbsp;
@@ -460,6 +461,7 @@ async function marcarVisto() {
 
 async function guardarCambios() {
   if (!currId) return alert('Selecciona un cupon');
+  const pagado = document.getElementById('sw-estado').checked;
   const fd = new FormData();
   fd.append('cuenta',      document.getElementById('e-cta').value);
   fd.append('nombre',      document.getElementById('e-nom').value);
@@ -468,8 +470,13 @@ async function guardarCambios() {
   fd.append('fecha_cobro', document.getElementById('e-fec').value);
   fd.append('telefono',    document.getElementById('e-tel').value);
   fd.append('comentario',  document.getElementById('e-com').value);
+  fd.append('estado',      pagado ? 'PAGADO' : 'PENDIENTE');
   await fetch(`/api/cupon/${currId}/guardar`, {method:'POST',body:fd});
   cargarTab(tabActual);
+  if (tabActual === 'PAGOS HOY' || tabActual === 'PAGOS DEL MES') {
+    cargarTab('PAGOS HOY');
+    cargarTab('PAGOS DEL MES');
+  }
 }
 
 function enviarWA() {
@@ -686,6 +693,40 @@ async function cerrarCaja() {
   cerrarModal();
   document.getElementById('lbl-caja').textContent = '$0';
   alert('✅ Caja cerrada. Ya podés empezar el nuevo día.');
+}
+
+async function mostrarDeudores() {
+  const res = await fetch(`/api/deudores?provincias=${encodeURIComponent(provincias.join(','))}`);
+  const data = await res.json();
+  if (!data.length) {
+    abrirModal(`<h2>⚠️ Clientes con 2+ Cuotas Pendientes</h2><p style="color:var(--muted);padding:20px 0">No hay clientes con 2 o más cuotas pendientes.</p><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
+    return;
+  }
+  let rows = data.map(c => `
+    <tr>
+      <td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td>
+      <td style="font-size:11px">${c.provincia}</td>
+      <td style="text-align:center"><span style="background:#e74c3c;color:white;border-radius:12px;padding:2px 10px;font-weight:700">${c.cant}</span></td>
+      <td style="font-size:11px">${c.cuotas_str}</td>
+      <td>$${(c.total||0).toLocaleString('es-AR')}</td>
+    </tr>`).join('');
+  abrirModal(`
+    <h2>⚠️ Clientes con 2+ Cuotas Pendientes</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">${data.length} cliente/s encontrado/s</p>
+    <table class="modal-table">
+      <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Detalle</th><th>Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="modal-footer">
+      <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarDeudoresTxt()">💾 Guardar .txt</button>
+    </div>`);
+}
+
+function descargarDeudoresTxt() {
+  const a = document.createElement('a');
+  a.href = '/api/deudores/txt?provincias=' + encodeURIComponent(provincias.join(','));
+  a.click();
 }
 
 function descargarBalanceTxt() {
