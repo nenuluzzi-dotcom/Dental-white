@@ -460,7 +460,21 @@ async def get_balance(provincias: str):
 
 @app.get("/api/caja_total")
 async def caja_total(provincias: str = "", usuario: str = ""):
-    """Suma de pagos desde el último reset de caja por usuario."""
+    """Suma de pagos desde el último reset de caja por usuario.
+    ADMINISTRADORA ve la suma de las cajas de NENNELLA y MICAELA."""
+    if usuario.upper() == "ADMINISTRADORA":
+        # Suma caja NENNELLA + caja MICAELA
+        total = 0.0
+        for u in ["NENNELLA", "MICAELA"]:
+            reset = get_ultimo_reset(u)
+            if not reset:
+                continue
+            prov_u = PROVINCIAS.get(u, [])
+            pagos_u = fetch_all(supabase.table("cupones").select("monto,provincia").eq("estado", "PAGADO").gte("pagado_en", reset))
+            pagos_u = [r for r in pagos_u if (r.get("provincia") or "").upper() in prov_u]
+            total += sum(r["monto"] or 0 for r in pagos_u)
+        return {"total": total, "ultimo_reset": None}
+    
     ultimo_reset = get_ultimo_reset(usuario)
     if not ultimo_reset:
         return {"total": 0, "ultimo_reset": None}
