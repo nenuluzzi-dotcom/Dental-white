@@ -28,16 +28,17 @@ PROVINCIAS = {
     "ADMINISTRADORA": ["BUENOS AIRES", "CORRIENTES", "SANTIAGO DEL ESTERO", "POSADAS", "SANTA FE"]
 }
 
+MESES = ["","ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+         "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
+
 progreso_tareas = {}
 
 def get_ultimo_reset(usuario: str = ""):
-    """Obtiene el timestamp del último reset de caja por usuario."""
     try:
         clave = f"ultimo_reset_{usuario.upper()}" if usuario else "ultimo_reset"
         res = supabase.table("config").select("valor").eq("clave", clave).execute()
         if res.data:
             return res.data[0]["valor"]
-        # Fallback al reset global
         res2 = supabase.table("config").select("valor").eq("clave", "ultimo_reset").execute()
         if res2.data:
             return res2.data[0]["valor"]
@@ -277,7 +278,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
         except Exception as e:
             log.warning(f"[PDF] Storage fallo (continua sin imagen): {e}")
 
-        # Anti-duplicado: usa cuenta + cuota + monto para no perder cupones del mismo cliente
         existentes = set()
         res_ex = supabase.table("cupones").select("cuenta,cta,monto").eq("provincia", prov).execute()
         for r in res_ex.data:
@@ -315,12 +315,10 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
 
                     txt_der = pagina.within_bbox((pw/2, y0, pw, y1)).extract_text() or ""
 
-                    # Número de afiliado
                     cta_n = "S/D"
                     mc = re.search(r"N[°º.\s]\s*(\d+)", txt_der)
                     if mc: cta_n = mc.group(1)
 
-                    # Nombre del afiliado — filtrar palabras del logo y encabezado
                     nom = "S/D"
                     if "AFILIADO" in txt_der.upper():
                         try:
@@ -334,14 +332,12 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                                 else:
                                     break
                             nom = " ".join(parts).strip() or "S/D"
-                            # Si quedaron mas de 5 palabras probablemente hay basura
                             palabras = nom.split()
                             if len(palabras) > 5:
                                 nom = " ".join(palabras[:4])
                         except:
                             pass
 
-                    # Monto
                     monto = 0.0
                     if "$" in txt_der:
                         try:
@@ -351,12 +347,10 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                         except:
                             pass
 
-                    # Fecha de cobro — la buscamos ANTES que la cuota
                     f_cobro = ""
                     mf = re.search(r"(\d{2}/\d{2}/\d{4})", txt_der)
                     if mf: f_cobro = mf.group(1)
 
-                    # Número de cuota — entre el monto y la fecha
                     cta_cuota = "S/D"
                     mcu = re.search(r"\$\s*[\d.,]+\s+(\d{1,2})\s+\d{9,}", txt_der)
                     if mcu:
@@ -376,7 +370,6 @@ def procesar_pdf_background(contenido: bytes, prov: str, tarea_id: str):
                             mcu2 = re.search(r"(?:CUOTA|CTA)[:\s]+?(\d{1,2})", txt_der, re.IGNORECASE)
                             if mcu2: cta_cuota = mcu2.group(1)
 
-                    # Anti-duplicado por cuenta + cuota + monto
                     clave_dup = (cta_n, cta_cuota, str(monto))
                     if cta_n != "S/D" and clave_dup in existentes:
                         p["saltados"] += 1
@@ -460,10 +453,7 @@ async def get_balance(provincias: str):
 
 @app.get("/api/caja_total")
 async def caja_total(provincias: str = "", usuario: str = ""):
-    """Suma de pagos desde el último reset de caja por usuario.
-    ADMINISTRADORA ve la suma de las cajas de NENNELLA y MICAELA."""
     if usuario.upper() == "ADMINISTRADORA":
-        # Suma caja NENNELLA + caja MICAELA
         total = 0.0
         for u in ["NENNELLA", "MICAELA"]:
             reset = get_ultimo_reset(u)
@@ -474,7 +464,7 @@ async def caja_total(provincias: str = "", usuario: str = ""):
             pagos_u = [r for r in pagos_u if (r.get("provincia") or "").upper() in prov_u]
             total += sum(r["monto"] or 0 for r in pagos_u)
         return {"total": total, "ultimo_reset": None}
-    
+
     ultimo_reset = get_ultimo_reset(usuario)
     if not ultimo_reset:
         return {"total": 0, "ultimo_reset": None}
@@ -579,68 +569,112 @@ async def balance_diario_txt(provincias: str = "", usuario: str = ""):
     nombre = f"balance_{datetime.now(TZ_ARG).strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
+# ── CIERRE MEJORADO ──────────────────────────────────────
 @app.get("/api/cierre")
 async def cierre(provincias: str):
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
     resultado = []
     for p in provincias.split(","):
         p = p.strip()
-        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
-        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
-        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
-        por_cli = defaultdict(list)
-        for r in res_pen.data:
+        # Pagados
+        res_pag = fetch_all(supabase.table("cupones").select("cuenta,nombre,monto,cta,medio_pago").eq("provincia", p).eq("estado", "PAGADO"))
+        # Pendientes
+        res_pen = fetch_all(supabase.table("cupones").select("cuenta,nombre,monto,cta,fecha_cobro").eq("provincia", p).eq("estado", "PENDIENTE"))
+
+        # Agrupar pagados por cliente
+        pag_cli = {}
+        for r in res_pag:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cli[clave].append(r["monto"] or 0)
+            if clave not in pag_cli:
+                pag_cli[clave] = {"nombre": r["nombre"] or "", "cuenta": r["cuenta"] or "", "cuotas": [], "total": 0.0, "medio": r["medio_pago"] or ""}
+            pag_cli[clave]["cuotas"].append(r["cta"] or "S/D")
+            pag_cli[clave]["total"] += r["monto"] or 0
+
+        # Agrupar pendientes por cliente
+        pen_cli = {}
+        for r in res_pen:
+            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
+            if clave not in pen_cli:
+                pen_cli[clave] = {"nombre": r["nombre"] or "", "cuenta": r["cuenta"] or "", "cupones": []}
+            # Extraer mes de fecha_cobro
+            mes_str = ""
+            if r.get("fecha_cobro"):
+                try:
+                    partes = r["fecha_cobro"].split("/")
+                    if len(partes) >= 2:
+                        mes_str = MESES[int(partes[1])]
+                except:
+                    pass
+            pen_cli[clave]["cupones"].append({
+                "cta": r["cta"] or "S/D",
+                "monto": r["monto"] or 0,
+                "mes": mes_str
+            })
+
+        # Separar simples y dobles en pendientes
+        simples = {k: v for k, v in pen_cli.items() if len(v["cupones"]) == 1}
+        dobles  = {k: v for k, v in pen_cli.items() if len(v["cupones"]) >= 2}
+
+        cobrado_total = sum(v["total"] for v in pag_cli.values())
+        pendiente_total = sum(c["monto"] for v in pen_cli.values() for c in v["cupones"])
+
+        # Metodos de pago
+        metodos = defaultdict(lambda: {"cant": 0, "monto": 0.0})
+        for v in pag_cli.values():
+            m = v["medio"] or "SIN METODO"
+            metodos[m]["cant"] += 1
+            metodos[m]["monto"] += v["total"]
+
         resultado.append({
-            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
+            "provincia": p,
+            "cobrado_cant": len(pag_cli),
+            "cobrado_monto": cobrado_total,
+            "pendiente_cant": len(pen_cli),
+            "pendiente_monto": pendiente_total,
+            "simples_cant": len(simples),
+            "simples_monto": sum(c["monto"] for v in simples.values() for c in v["cupones"]),
+            "dobles_cant": len(dobles),
+            "dobles_monto": sum(c["monto"] for v in dobles.values() for c in v["cupones"]),
+            "pagados": sorted(pag_cli.values(), key=lambda x: x["cuenta"]),
+            "pendientes_simples": sorted(simples.values(), key=lambda x: x["cuenta"]),
+            "pendientes_dobles": sorted(dobles.values(), key=lambda x: x["cuenta"]),
+            "metodos": dict(metodos)
         })
-    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
-    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
-    for r in res_met.data:
-        m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
-    return {"provincias": resultado, "metodos": dict(metodos)}
+    return resultado
 
 @app.get("/api/cierre/txt")
 async def cierre_txt(provincias: str):
-    hoy = datetime.now(TZ_ARG).strftime("%Y-%m-%d")
-    resultado = []
-    for p in provincias.split(","):
-        p = p.strip()
-        res_cob = supabase.table("cupones").select("monto").eq("provincia", p).eq("fecha_pago", hoy).execute()
-        cobrado = sum(r["monto"] or 0 for r in res_cob.data)
-        res_pen = supabase.table("cupones").select("cuenta,nombre,monto").eq("provincia", p).eq("estado", "PENDIENTE").execute()
-        por_cli = defaultdict(list)
-        for r in res_pen.data:
-            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            por_cli[clave].append(r["monto"] or 0)
-        resultado.append({
-            "provincia": p, "cobrado_cant": len(res_cob.data), "cobrado_monto": cobrado,
-            "pendiente_cant": len(por_cli),
-            "pendiente_monto": sum(min(v) for v in por_cli.values())
-        })
-    res_met = supabase.table("cupones").select("medio_pago,monto").eq("fecha_pago", hoy).execute()
-    metodos = defaultdict(lambda: {"cant": 0, "monto": 0})
-    for r in res_met.data:
-        m = r["medio_pago"] or "SIN METODO"
-        metodos[m]["cant"] += 1; metodos[m]["monto"] += r["monto"] or 0
+    data = await cierre(provincias)
     fecha_fmt = datetime.now(TZ_ARG).strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50,"     DENTAL WHITE - CIERRE DEL DIA",f"     {fecha_fmt}","="*50]
-    tc, tp = 0, 0
-    for r in resultado:
-        lineas += ["",f"  PROVINCIA: {r['provincia']}","-"*50,
-                   f"  Cobrado:    {r['cobrado_cant']} cliente/s  $ {r['cobrado_monto']:>10,.0f}",
-                   f"  Pendiente:  {r['pendiente_cant']} cliente/s  $ {r['pendiente_monto']:>10,.0f}"]
-        tc += r["cobrado_monto"]; tp += r["pendiente_monto"]
-    lineas += ["","="*50,"  RESUMEN GENERAL","-"*50,
-               f"  Total cobrado:   $ {tc:>10,.0f}",
-               f"  Total pendiente: $ {tp:>10,.0f}","","  POR METODO:"]
-    for m,v in metodos.items():
-        lineas.append(f"    {m:<20} {v['cant']} pago/s  $ {v['monto']:>10,.0f}")
-    lineas.append("="*50)
+    lineas = ["="*60, "        DENTAL WHITE - CIERRE DE MES", f"        {fecha_fmt}", "="*60]
+
+    tc, tp = 0.0, 0.0
+    for r in data:
+        tc += r["cobrado_monto"]
+        tp += r["pendiente_monto"]
+        lineas += ["", f"  ╔══ {r['provincia']} ══", "  ║"]
+        lineas.append(f"  ║  COBRADO:   {r['cobrado_cant']} clientes   $ {r['cobrado_monto']:>12,.0f}")
+        lineas.append(f"  ║  PENDIENTE: {r['pendiente_cant']} clientes   $ {r['pendiente_monto']:>12,.0f}")
+        lineas += ["  ║", "  ║  — CLIENTES QUE PAGARON —"]
+        for c in r["pagados"]:
+            cuotas = ", ".join(c["cuotas"])
+            lineas.append(f"  ║    N°{c['cuenta']:<10} {c['nombre']:<28} ${c['total']:>10,.0f}  [{c['medio']}]  Cta/s: {cuotas}")
+        lineas += ["  ║", f"  ║  — PENDIENTES SIMPLES ({r['simples_cant']}) — $ {r['simples_monto']:,.0f}"]
+        for c in r["pendientes_simples"]:
+            cup = c["cupones"][0]
+            mes = f" ({cup['mes']})" if cup["mes"] else ""
+            lineas.append(f"  ║    N°{c['cuenta']:<10} {c['nombre']:<28} Cta {cup['cta']}{mes}  ${cup['monto']:>10,.0f}")
+        lineas += ["  ║", f"  ║  — PENDIENTES DOBLES/MÚLTIPLES ({r['dobles_cant']}) — $ {r['dobles_monto']:,.0f}"]
+        for c in r["pendientes_dobles"]:
+            detalle = "  |  ".join([f"Cta {x['cta']}{' ('+x['mes']+')' if x['mes'] else ''}  ${x['monto']:,.0f}" for x in c["cupones"]])
+            lineas.append(f"  ║    N°{c['cuenta']:<10} {c['nombre']:<28} {detalle}")
+        lineas += ["  ║", "  ║  — POR METODO DE PAGO —"]
+        for m, v in r["metodos"].items():
+            lineas.append(f"  ║    {m:<22} {v['cant']} pago/s   $ {v['monto']:>10,.0f}")
+        lineas.append("  ╚" + "═"*56)
+
+    lineas += ["", "="*60, "  RESUMEN GENERAL", "-"*60,
+               f"  Total cobrado:   $ {tc:>12,.0f}",
+               f"  Total pendiente: $ {tp:>12,.0f}", "="*60]
     nombre = f"cierre_{datetime.now(TZ_ARG).strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
@@ -659,54 +693,61 @@ async def cierre_confirmar(provincias: str = Form(...)):
         log.info(f"[CIERRE] {p} borrado con imagenes")
     return {"ok": True}
 
-
+# ── DEUDORES MEJORADO ────────────────────────────────────
 @app.get("/api/deudores")
 async def get_deudores(provincias: str = ""):
-    """Clientes con 2 o mas cuotas pendientes."""
     resultado = []
     provs = [p.strip().upper() for p in provincias.split(",") if p.strip()] if provincias else []
     for prov in provs:
-        res = supabase.table("cupones").select("cuenta,nombre,monto,cta,fecha_cobro").eq("provincia", prov).eq("estado", "PENDIENTE").execute()
+        res = fetch_all(supabase.table("cupones").select("cuenta,nombre,monto,cta,fecha_cobro").eq("provincia", prov).eq("estado", "PENDIENTE"))
         por_cliente = {}
-        for r in res.data:
+        for r in res:
             clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
             if clave not in por_cliente:
-                por_cliente[clave] = {"nombre": r["nombre"] or "", "cuenta": r["cuenta"] or "", "provincia": prov, "cuotas": [], "total": 0.0}
-            por_cliente[clave]["cuotas"].append(r["cta"] or "S/D")
+                por_cliente[clave] = {"nombre": r["nombre"] or "", "cuenta": r["cuenta"] or "", "provincia": prov, "cupones": [], "total": 0.0}
+            # Extraer mes de fecha_cobro
+            mes_str = ""
+            if r.get("fecha_cobro"):
+                try:
+                    partes = r["fecha_cobro"].split("/")
+                    if len(partes) >= 2:
+                        mes_str = MESES[int(partes[1])]
+                except:
+                    pass
+            por_cliente[clave]["cupones"].append({
+                "cta": r["cta"] or "S/D",
+                "monto": r["monto"] or 0,
+                "mes": mes_str
+            })
             por_cliente[clave]["total"] += r["monto"] or 0
+
         for k, v in por_cliente.items():
-            if len(v["cuotas"]) >= 2:
-                resultado.append({**v, "cuotas_str": ", ".join(v["cuotas"]), "cant": len(v["cuotas"])})
-    resultado.sort(key=lambda x: (x["provincia"], x["nombre"]))
+            if len(v["cupones"]) >= 2:
+                # Ordenar cupones por numero de cuota
+                v["cupones"].sort(key=lambda x: int(x["cta"]) if x["cta"].isdigit() else 0)
+                resultado.append(v)
+
+    # Ordenar por numero de afiliado
+    resultado.sort(key=lambda x: (x["provincia"], int(x["cuenta"]) if x["cuenta"].isdigit() else 99999))
     return resultado
 
 @app.get("/api/deudores/txt")
 async def get_deudores_txt(provincias: str = ""):
-    provs = [p.strip().upper() for p in provincias.split(",") if p.strip()] if provincias else []
-    resultado = []
-    for prov in provs:
-        res = supabase.table("cupones").select("cuenta,nombre,monto,cta").eq("provincia", prov).eq("estado", "PENDIENTE").execute()
-        por_cliente = {}
-        for r in res.data:
-            clave = r["cuenta"] if (r.get("cuenta") and r["cuenta"] != "S/D") else r["nombre"]
-            if clave not in por_cliente:
-                por_cliente[clave] = {"nombre": r["nombre"] or "", "cuenta": r["cuenta"] or "", "provincia": prov, "cuotas": [], "total": 0.0}
-            por_cliente[clave]["cuotas"].append(r["cta"] or "S/D")
-            por_cliente[clave]["total"] += r["monto"] or 0
-        for k, v in por_cliente.items():
-            if len(v["cuotas"]) >= 2:
-                resultado.append(v)
-    resultado.sort(key=lambda x: (x["provincia"], x["nombre"]))
+    data = await get_deudores(provincias)
     fecha_fmt = datetime.now(TZ_ARG).strftime("%d/%m/%Y %H:%M")
-    lineas = ["="*50, "     DENTAL WHITE - CLIENTES CON 2+ CUOTAS", f"     {fecha_fmt}", "="*50, ""]
+    lineas = ["="*60, "     DENTAL WHITE - CLIENTES CON 2+ CUOTAS PENDIENTES", f"     {fecha_fmt}", "="*60, ""]
     prov_act = ""
-    for c in resultado:
+    for c in data:
         if c["provincia"] != prov_act:
             prov_act = c["provincia"]
-            lineas += ["", f"  [ {prov_act} ]", "-"*50]
-        cuotas = ", ".join(c["cuotas"])
-        lineas.append(f"  N°{c['cuenta']:<12} {c['nombre']:<30} Cuotas: {cuotas}  $ {c['total']:>10,.0f}")
-    lineas += ["", "="*50, f"  TOTAL CLIENTES: {len(resultado)}", "="*50]
+            lineas += ["", f"  [ {prov_act} ]", "-"*60]
+        lineas.append(f"  N°{c['cuenta']:<10} {c['nombre']}")
+        for cup in c["cupones"]:
+            mes = f" {cup['mes']}" if cup["mes"] else ""
+            lineas.append(f"             Cuota {cup['cta']}{mes}   $ {cup['monto']:>10,.0f}")
+        lineas.append(f"             {'TOTAL':>20}   $ {c['total']:>10,.0f}")
+        lineas.append("")
+    lineas += ["="*60, f"  TOTAL CLIENTES: {len(data)}", "="*60]
     nombre = f"deudores_{datetime.now(TZ_ARG).strftime('%Y%m%d_%H%M')}.txt"
     return PlainTextResponse("\n".join(lineas), headers={"Content-Disposition": f"attachment; filename={nombre}"})
 
