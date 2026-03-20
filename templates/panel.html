@@ -723,7 +723,7 @@ async function mostrarDeudores() {
   }
   let rows = data.map(c => {
     const detalle = c.cupones.map(d =>
-      `<div style="font-size:11px;color:#555">Cuota ${d.cuota} ${d.mes} — $${(d.monto||0).toLocaleString('es-AR')}</div>`
+      `<div style="font-size:11px;color:#555">Cuota ${d.cta} ${d.mes} — $${(d.monto||0).toLocaleString('es-AR')}</div>`
     ).join('');
     return `<tr>
       <td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td>
