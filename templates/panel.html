@@ -618,26 +618,45 @@ async function mostrarIniciarMes() {
 
 // ── CIERRE ────────────────────────────────────────────
 async function mostrarCierre() {
-  const res = await fetch(`/api/cierre?provincias=${encodeURIComponent(provincias.join(','))}`);
+  const res = await fetch(`/api/cierre/detalle?provincias=${encodeURIComponent(provincias.join(','))}`);
   const data = await res.json();
-  let rows = data.provincias.map(d=>`<tr><td>${d.provincia}</td><td>${d.cobrado_cant} — $${(d.cobrado_monto||0).toLocaleString('es-AR')}</td><td>${d.pendiente_cant} — $${(d.pendiente_monto||0).toLocaleString('es-AR')}</td></tr>`).join('');
-  let metRows = Object.entries(data.metodos).map(([m,v])=>`<tr><td>${m}</td><td>${v.cant}</td><td>$${(v.monto||0).toLocaleString('es-AR')}</td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--muted);padding:10px">Sin pagos hoy</td></tr>';
-  abrirModal(`
-    <h2>📝 Cierre del Mes</h2>
-    <table class="modal-table" style="margin-bottom:16px">
-      <thead><tr><th>Provincia</th><th>Cobrado hoy</th><th>Pendiente</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Por metodo de pago:</p>
-    <table class="modal-table" style="margin-bottom:16px">
-      <thead><tr><th>Metodo</th><th>Cant</th><th>Monto</th></tr></thead>
-      <tbody>${metRows}</tbody>
-    </table>
-    <div class="modal-footer">
-      <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cancelar</button>
-      <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarCierreTxt()">💾 Guardar .txt</button>
-      <button class="btn-modal btn-modal-rojo" onclick="confirmarCierre()">🗑️ Confirmar y Borrar</button>
-    </div>`);
+
+  let html = '<h2>📝 Cierre del Mes</h2>';
+
+  data.forEach(d => {
+    // Resumen provincia
+    html += `<div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px">📍 ${d.provincia}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+        <div>✅ Cobrado: <strong>$${(d.total_cobrado||0).toLocaleString('es-AR')}</strong> (${d.cant_pagados} clientes)</div>
+        <div>⏳ Pendiente: <strong>$${(d.total_pendiente||0).toLocaleString('es-AR')}</strong> (${d.cant_pendientes} clientes)</div>
+        <div>📄 Simples: ${d.cant_simples} cupones — $${(d.monto_simples||0).toLocaleString('es-AR')}</div>
+        <div>📋 Dobles/Triples: ${d.cant_dobles} clientes — $${(d.monto_dobles||0).toLocaleString('es-AR')}</div>
+      </div>`;
+
+    // Metodos
+    html += '<div style="margin-top:8px;font-size:12px;color:#666">';
+    Object.entries(d.metodos).forEach(([m,v]) => {
+      html += `${m}: $${(v.monto||0).toLocaleString('es-AR')} (${v.cant}) &nbsp;`;
+    });
+    html += '</div></div>';
+  });
+
+  // Totales generales
+  const totCob = data.reduce((s,d) => s + d.total_cobrado, 0);
+  const totPen = data.reduce((s,d) => s + d.total_pendiente, 0);
+  html += `<div style="background:#27ae60;color:white;border-radius:8px;padding:12px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div>TOTAL COBRADO<br><strong style="font-size:18px">$${totCob.toLocaleString('es-AR')}</strong></div>
+    <div>TOTAL PENDIENTE<br><strong style="font-size:18px">$${totPen.toLocaleString('es-AR')}</strong></div>
+  </div>`;
+
+  html += `<div class="modal-footer">
+    <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cancelar</button>
+    <button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarCierreDetalleTxt()">💾 Guardar .txt detallado</button>
+    <button class="btn-modal btn-modal-rojo" onclick="confirmarCierre()">🗑️ Confirmar y Borrar</button>
+  </div>`;
+
+  abrirModal(html);
 }
 
 async function confirmarCierre() {
@@ -657,7 +676,7 @@ async function confirmarCierre() {
 
 // ── BALANCE DIARIO ────────────────────────────────────
 async function mostrarBalanceDiario() {
-  const res = await fetch(`/api/balance_diario?provincias=${encodeURIComponent(provincias.join(','))}`);
+  const res = await fetch(`/api/balance_diario?provincias=${encodeURIComponent(provincias.join(','))}&usuario=${encodeURIComponent(usuario)}`);
   const d = await res.json();
   let rows = d.clientes.map(c=>`
     <tr>
@@ -702,19 +721,23 @@ async function mostrarDeudores() {
     abrirModal(`<h2>⚠️ Clientes con 2+ Cuotas Pendientes</h2><p style="color:var(--muted);padding:20px 0">No hay clientes con 2 o más cuotas pendientes.</p><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
     return;
   }
-  let rows = data.map(c => `
-    <tr>
+  let rows = data.map(c => {
+    const detalle = c.detalle_cuotas.map(d =>
+      `<div style="font-size:11px;color:#555">Cuota ${d.cuota} ${d.mes} — $${(d.monto||0).toLocaleString('es-AR')}</div>`
+    ).join('');
+    return `<tr>
       <td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td>
       <td style="font-size:11px">${c.provincia}</td>
       <td style="text-align:center"><span style="background:#e74c3c;color:white;border-radius:12px;padding:2px 10px;font-weight:700">${c.cant}</span></td>
-      <td style="font-size:11px">${c.cuotas_str}</td>
-      <td>$${(c.total||0).toLocaleString('es-AR')}</td>
-    </tr>`).join('');
+      <td>${detalle}</td>
+      <td><strong>$${(c.total||0).toLocaleString('es-AR')}</strong></td>
+    </tr>`;
+  }).join('');
   abrirModal(`
     <h2>⚠️ Clientes con 2+ Cuotas Pendientes</h2>
-    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">${data.length} cliente/s encontrado/s</p>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">${data.length} cliente/s — ordenados por N° de afiliado</p>
     <table class="modal-table">
-      <thead><tr><th>Afiliado</th><th>Provincia</th><th>Cuotas</th><th>Detalle</th><th>Total</th></tr></thead>
+      <thead><tr><th>Afiliado</th><th>Prov</th><th>Cuotas</th><th>Detalle</th><th>Total</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="modal-footer">
@@ -734,6 +757,12 @@ function descargarBalanceTxt() {
   a.href='/api/balance_diario/txt?provincias='+encodeURIComponent(provincias.join(','))+'&usuario='+encodeURIComponent(usuario);
   a.click();
 }
+function descargarCierreDetalleTxt() {
+  const a = document.createElement('a');
+  a.href = '/api/cierre/detalle/txt?provincias=' + encodeURIComponent(provincias.join(','));
+  a.click();
+}
+
 function descargarCierreTxt() {
   const a=document.createElement('a');
   a.href='/api/cierre/txt?provincias='+encodeURIComponent(provincias.join(','));
