@@ -728,7 +728,7 @@ async function mostrarDeudores() {
     return `<tr>
       <td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td>
       <td style="font-size:11px">${c.provincia}</td>
-      <td style="text-align:center"><span style="background:#e74c3c;color:white;border-radius:12px;padding:2px 10px;font-weight:700">${c.cant}</span></td>
+      <td style="text-align:center"><span style="background:#e74c3c;color:white;border-radius:12px;padding:2px 10px;font-weight:700">${c.cupones.length}</span></td>
       <td>${detalle}</td>
       <td><strong>$${(c.total||0).toLocaleString('es-AR')}</strong></td>
     </tr>`;
