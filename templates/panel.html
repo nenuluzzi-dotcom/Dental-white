@@ -228,7 +228,6 @@ function logout() { sessionStorage.clear(); window.location.href='/'; }
 function crearTabs() {
   const nav = document.getElementById('tabs-nav');
   const body = document.getElementById('tabs-body');
-  // CAMBIO 1: agregado 'PAGOS DEL MES'
   const allTabs = ['PAGOS HOY', 'PAGOS DEL MES', ...provincias];
   allTabs.forEach((p, i) => {
     const btn = document.createElement('button');
@@ -283,7 +282,6 @@ async function cargarTab(p, buscar='') {
   if (p==='PAGOS HOY') {
     url = `/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`;
   } else if (p==='PAGOS DEL MES') {
-    // CAMBIO 2: nueva pestaña apunta a /api/cupones/mes
     url = `/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`;
   } else {
     url = `/api/cupones?provincia=${encodeURIComponent(p)}&buscar=${encodeURIComponent(buscar)}`;
@@ -347,7 +345,6 @@ function renderTabla(p, data) {
 
 function buscarEn(p, val) {
   if (p === 'PAGOS HOY' || p === 'PAGOS DEL MES') {
-    // Filtrar en memoria por nombre o cuenta (parcial, sin importar mayúsculas)
     if (!cupones[p]) return;
     const q = val.trim().toLowerCase();
     const filtrado = q
@@ -451,7 +448,6 @@ async function registrarPago() {
 async function marcarVisto() {
   if (!currId) return;
   await fetch(`/api/cupon/${currId}/visto`, {method:'POST'});
-  // Refrescar ambas pestañas para que el registro se mueva
   cargarTab('PAGOS HOY');
   cargarTab('PAGOS DEL MES');
   if (tabActual !== 'PAGOS HOY' && tabActual !== 'PAGOS DEL MES') {
@@ -490,7 +486,6 @@ function enviarWA() {
 async function cargarBalance() {
   const provs = provincias.join(',');
   if (!provs) return;
-  // Tabla de balance por provincia
   const res = await fetch(`/api/balance?provincias=${encodeURIComponent(provs)}`);
   const data = await res.json();
   const tbody = document.querySelector('#tabla-balance tbody');
@@ -503,7 +498,6 @@ async function cargarBalance() {
       <td>$${(d.cobrado||0).toLocaleString('es-AR')}</td>`;
     tbody.appendChild(tr);
   });
-  // Caja del día: solo suma desde el último reset
   const resCaja = await fetch(`/api/caja_total?provincias=${encodeURIComponent(provs)}&usuario=${encodeURIComponent(usuario)}`);
   const caja = await resCaja.json();
   document.getElementById('lbl-caja').textContent = '$' + (caja.total||0).toLocaleString('es-AR');
@@ -624,17 +618,15 @@ async function mostrarCierre() {
   let html = '<h2>📝 Cierre del Mes</h2>';
 
   data.forEach(d => {
-    // Resumen provincia
     html += `<div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px">
       <div style="font-weight:700;font-size:14px;margin-bottom:8px">📍 ${d.provincia}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
-        <div>✅ Cobrado: <strong>$${(d.total_cobrado||0).toLocaleString('es-AR')}</strong> (${d.cant_pagados} clientes)</div>
-        <div>⏳ Pendiente: <strong>$${(d.total_pendiente||0).toLocaleString('es-AR')}</strong> (${d.cant_pendientes} clientes)</div>
-        <div>📄 Simples: ${d.cant_simples} cupones — $${(d.monto_simples||0).toLocaleString('es-AR')}</div>
-        <div>📋 Dobles/Triples: ${d.cant_dobles} clientes — $${(d.monto_dobles||0).toLocaleString('es-AR')}</div>
+        <div>✅ Cobrado: <strong>$${(d.cobrado_monto||0).toLocaleString('es-AR')}</strong> (${d.cobrado_cant} clientes)</div>
+        <div>⏳ Pendiente: <strong>$${(d.pendiente_monto||0).toLocaleString('es-AR')}</strong> (${d.pendiente_cant} clientes)</div>
+        <div>📄 Simples: ${d.simples_cant} cupones — $${(d.simples_monto||0).toLocaleString('es-AR')}</div>
+        <div>📋 Dobles/Triples: ${d.dobles_cant} clientes — $${(d.dobles_monto||0).toLocaleString('es-AR')}</div>
       </div>`;
 
-    // Metodos
     html += '<div style="margin-top:8px;font-size:12px;color:#666">';
     Object.entries(d.metodos).forEach(([m,v]) => {
       html += `${m}: $${(v.monto||0).toLocaleString('es-AR')} (${v.cant}) &nbsp;`;
@@ -642,9 +634,8 @@ async function mostrarCierre() {
     html += '</div></div>';
   });
 
-  // Totales generales
-  const totCob = data.reduce((s,d) => s + d.total_cobrado, 0);
-  const totPen = data.reduce((s,d) => s + d.total_pendiente, 0);
+  const totCob = data.reduce((s,d) => s + (d.cobrado_monto||0), 0);
+  const totPen = data.reduce((s,d) => s + (d.pendiente_monto||0), 0);
   html += `<div style="background:#27ae60;color:white;border-radius:8px;padding:12px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <div>TOTAL COBRADO<br><strong style="font-size:18px">$${totCob.toLocaleString('es-AR')}</strong></div>
     <div>TOTAL PENDIENTE<br><strong style="font-size:18px">$${totPen.toLocaleString('es-AR')}</strong></div>
@@ -664,7 +655,6 @@ async function confirmarCierre() {
   const fd = new FormData();
   fd.append('provincias', provincias.join(','));
   await fetch('/api/cierre/confirmar', {method:'POST',body:fd});
-  // CAMBIO 3: al confirmar cierre, la caja vuelve a $0
   document.getElementById('lbl-caja').textContent = '$0';
   cerrarModal();
   currId = null;
@@ -757,6 +747,7 @@ function descargarBalanceTxt() {
   a.href='/api/balance_diario/txt?provincias='+encodeURIComponent(provincias.join(','))+'&usuario='+encodeURIComponent(usuario);
   a.click();
 }
+
 function descargarCierreDetalleTxt() {
   const a = document.createElement('a');
   a.href = '/api/cierre/txt?provincias=' + encodeURIComponent(provincias.join(','));
