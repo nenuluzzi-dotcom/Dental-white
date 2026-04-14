@@ -692,10 +692,10 @@ async function descargarPendientesMesTxt(){
 // ── TRANSFERENCIAS BANCARIAS — 09/04 al 13/04 ────────
 // ════════════════════════════════════════════════════════
 async function mostrarTransferenciasBancarias(){
-  const FECHA_DESDE = new Date(2026, 4, 9);  // 09/04/2026
-  const FECHA_HASTA = new Date(2026, 4, 13); // 13/04/2026
+  const FECHA_DESDE = new Date(2025, 3, 9);  // 09/04/2025
+  const FECHA_HASTA = new Date(2025, 3, 13); // 13/04/2025
   FECHA_HASTA.setHours(23,59,59);
-  const BANCOS = ['SANTANDER','FRANCES','FRANCÉS','GALICIA''BBVA''MACRO'];
+  const BANCOS = ['SANTANDER','FRANCES','FRANCÉS','GALICIA'];
 
   const todos = await cargarTodosCupones();
 
@@ -733,8 +733,6 @@ async function mostrarTransferenciasBancarias(){
     if(com.includes('SANTANDER')) banco='SANTANDER';
     else if(com.includes('FRANCES')||com.includes('FRANCÉS')) banco='FRANCÉS';
     else if(com.includes('GALICIA')) banco='GALICIA';
-    else if(com.includes('BBVA')) banco='BBVA';
-    else if(com.includes('MACRO')) banco='MACRO';
     if(!porBanco[banco]){porBanco[banco]={cant:0,monto:0};}
     porBanco[banco].cant++; porBanco[banco].monto+=(r.monto||0);
   });
