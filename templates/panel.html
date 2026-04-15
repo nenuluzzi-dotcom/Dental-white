@@ -42,6 +42,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;hei
 .btn-rojo-oscuro{background:#922b21;color:white}
 .btn-violeta{background:#7d3c98;color:white}
 .btn-celeste{background:#1a6b8a;color:white}
+.btn-teal{background:#0e7c7b;color:white}
 .leyenda{font-size:11px;color:var(--muted);text-align:center;padding:8px 0;border-top:1px solid var(--border)}
 .dot-verde{display:inline-block;width:8px;height:8px;background:#4caf50;border-radius:50%}
 .dot-naranja{display:inline-block;width:8px;height:8px;background:var(--naranja);border-radius:50%}
@@ -112,15 +113,15 @@ input:checked+.slider::before{transform:translateX(20px)}
 .btn-modal-cancel{background:var(--card);color:var(--text);border:1px solid var(--border)}
 .btn-modal-rojo{background:var(--rojo);color:white}
 .alerta-banner{background:#922b21;color:white;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;font-weight:600}
-.resumen-dias{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.dia-card{flex:1;min-width:80px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center}
-.dia-card .dc-dia{font-size:12px;font-weight:700;color:#1a6b8a;margin-bottom:2px}
-.dia-card .dc-monto{font-size:13px;font-weight:700;color:var(--text)}
-.dia-card .dc-cant{font-size:10px;color:var(--muted)}
-.resumen-totales{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
+.resumen-3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
 .res-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
 .res-card .rc-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-.res-card .rc-val{font-size:18px;font-weight:700}
+.res-card .rc-val{font-size:20px;font-weight:700}
+.resumen-dias{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.dia-card{flex:1;min-width:78px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center}
+.dia-card .dc-dia{font-size:11px;font-weight:700;color:#0e7c7b}
+.dia-card .dc-monto{font-size:13px;font-weight:700}
+.dia-card .dc-cant{font-size:10px;color:var(--muted)}
 .resumen-mes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
 .resumen-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
 .resumen-card .rc-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
@@ -171,7 +172,8 @@ input:checked+.slider::before{transform:translateX(20px)}
     <button class="btn-panel btn-rojo" onclick="eliminarCupon()">❌ ELIMINAR</button>
     <button class="btn-panel btn-naranja" onclick="mostrarBalanceDiario()">📊 BALANCE DIARIO</button>
     <button class="btn-panel btn-violeta" onclick="mostrarPendientesMes()">📋 PENDIENTES DEL MES</button>
-    <button class="btn-panel btn-celeste" onclick="mostrarTransferenciasBancarias()">🏦 TRANSFERENCIAS 09-14/04</button>
+    <button class="btn-panel btn-teal" onclick="mostrarTransferenciasDesdeVistas()">💳 TRANSF. PAGADAS 09-14/04</button>
+    <button class="btn-panel btn-celeste" onclick="mostrarTransferenciasBancarias()">🏦 TRANSF. BANCARIAS 09-14/04</button>
     <button class="btn-panel btn-rojo" onclick="mostrarDeudores()">⚠️ 2+ CUOTAS PENDIENTES</button>
     <button class="btn-panel btn-rojo-oscuro" onclick="mostrarDeudores3()">🚨 3+ CUOTAS PENDIENTES</button>
   </div>
@@ -230,6 +232,7 @@ input:checked+.slider::before{transform:translateX(20px)}
 
 <script>
 const MESES_ES=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+const DIAS_LABELS={9:'Mié 9/04',10:'Jue 10/04',11:'Vie 11/04',12:'Sáb 12/04',13:'Dom 13/04',14:'Lun 14/04'};
 
 const BANCOS_CONFIG=[
   {nombre:'SANTANDER',keys:['SANTANDER'],color:'#c0392b'},
@@ -246,7 +249,7 @@ window.onload=()=>{
   provincias=JSON.parse(sessionStorage.getItem('provincias')||'[]');
   if(!usuario){window.location.href='/';return;}
   document.getElementById('lbl-usuario').textContent=usuario;
-  crearTabs();cargarBalance();
+  crearTabs(); cargarBalance();
 };
 function logout(){sessionStorage.clear();window.location.href='/';}
 
@@ -287,8 +290,7 @@ function renderTabla(p,data){
   if(p==='PAGOS HOY'||p==='PAGOS DEL MES'){
     data.forEach(r=>{
       const tr=document.createElement('tr');
-      if(r.visto)tr.classList.add('row-visto');
-      if(r.id===currId)tr.classList.add('selected');
+      if(r.visto)tr.classList.add('row-visto');if(r.id===currId)tr.classList.add('selected');
       tr.onclick=()=>cargarDetalle(r.id);
       const badge=r.estado==='PAGADO'?`<span class="badge-pagado">PAGADO${r.visto?' 👁️':''}</span>`:`<span class="badge-pend">PEND</span>`;
       const nro=r.cuenta&&r.cuenta!=='S/D'?`<span style="font-size:10px;color:#888;margin-right:4px">N°${r.cuenta}</span>`:'';
@@ -300,8 +302,7 @@ function renderTabla(p,data){
       const tr=document.createElement('tr');
       if(r.cuotas_pendientes>1)tr.className='row-deudor';
       else tr.className=r.color==='verde'?'row-verde':r.color==='naranja'?'row-naranja':'';
-      if(r.id===currId)tr.classList.add('selected');
-      tr.onclick=()=>cargarDetalle(r.id);
+      if(r.id===currId)tr.classList.add('selected');tr.onclick=()=>cargarDetalle(r.id);
       const badge=r.estado==='PAGADO'?'<span class="badge-pagado">PAGADO</span>':'<span class="badge-pend">PENDIENTE</span>';
       const cC=r.cuotas_pendientes>1?`<td style="text-align:center"><span style="background:#e74c3c;color:white;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:700">${r.cuotas_pendientes}</span></td>`:`<td style="text-align:center;color:#aaa;font-size:11px">${r.cuotas_pendientes||''}</td>`;
       tr.innerHTML=`<td>${r.id}</td><td>${r.cuenta||''}</td><td>${r.nombre||''}</td><td>$${(r.monto||0).toLocaleString('es-AR')}</td><td>${r.cta||''}</td>${cC}<td>${r.fecha_cobro||''}</td><td>${badge}</td>`;
@@ -352,37 +353,29 @@ function toggleEstado(){const pagado=document.getElementById('sw-estado').checke
 async function registrarPago(){
   if(!currId)return alert('Selecciona un cupon');const btn=document.getElementById('btn-registrar');if(btn.disabled)return;
   bloquearBtn('btn-registrar','⏳ Registrando...');
-  try{
-    const fd=new FormData();fd.append('medio_pago',document.getElementById('e-pag').value);fd.append('comentario',document.getElementById('e-com').value);
+  try{const fd=new FormData();fd.append('medio_pago',document.getElementById('e-pag').value);fd.append('comentario',document.getElementById('e-com').value);
     const res=await fetch(`/api/cupon/${currId}/pago`,{method:'POST',body:fd});
     if(!res.ok){desbloquearBtn('btn-registrar','❌ Error',2500);return;}
-    desbloquearBtn('btn-registrar','✅ Registrado!');
-    await cargarTab(tabActual);if(tabActual!=='PAGOS HOY')cargarTab('PAGOS HOY');if(tabActual!=='PAGOS DEL MES')cargarTab('PAGOS DEL MES');
+    desbloquearBtn('btn-registrar','✅ Registrado!');await cargarTab(tabActual);if(tabActual!=='PAGOS HOY')cargarTab('PAGOS HOY');if(tabActual!=='PAGOS DEL MES')cargarTab('PAGOS DEL MES');
   }catch(e){desbloquearBtn('btn-registrar','❌ Sin conexión',2500);}
 }
 async function marcarVisto(){
   if(!currId)return;const btn=document.getElementById('btn-visto');if(btn.disabled)return;
   bloquearBtn('btn-visto','⏳ Guardando...');
-  try{
-    const res=await fetch(`/api/cupon/${currId}/visto`,{method:'POST'});
-    if(!res.ok){desbloquearBtn('btn-visto','❌ Error',2000);return;}
-    desbloquearBtn('btn-visto','👁️ Listo!');cargarTab('PAGOS HOY');cargarTab('PAGOS DEL MES');
-    if(tabActual!=='PAGOS HOY'&&tabActual!=='PAGOS DEL MES')cargarTab(tabActual);
+  try{const res=await fetch(`/api/cupon/${currId}/visto`,{method:'POST'});if(!res.ok){desbloquearBtn('btn-visto','❌ Error',2000);return;}
+    desbloquearBtn('btn-visto','👁️ Listo!');cargarTab('PAGOS HOY');cargarTab('PAGOS DEL MES');if(tabActual!=='PAGOS HOY'&&tabActual!=='PAGOS DEL MES')cargarTab(tabActual);
   }catch(e){desbloquearBtn('btn-visto','❌ Sin conexión',2000);}
 }
 async function guardarCambios(){
   if(!currId)return alert('Selecciona un cupon');const btn=document.getElementById('btn-guardar');if(btn.disabled)return;
   bloquearBtn('btn-guardar','⏳ Guardando...');
-  try{
-    const pagado=document.getElementById('sw-estado').checked;const fd=new FormData();
+  try{const pagado=document.getElementById('sw-estado').checked;const fd=new FormData();
     fd.append('cuenta',document.getElementById('e-cta').value);fd.append('nombre',document.getElementById('e-nom').value);
     fd.append('monto',document.getElementById('e-mon').value);fd.append('cta',document.getElementById('e-cuo').value);
     fd.append('fecha_cobro',document.getElementById('e-fec').value);fd.append('telefono',document.getElementById('e-tel').value);
     fd.append('comentario',document.getElementById('e-com').value);fd.append('estado',pagado?'PAGADO':'PENDIENTE');
-    const res=await fetch(`/api/cupon/${currId}/guardar`,{method:'POST',body:fd});
-    if(!res.ok){desbloquearBtn('btn-guardar','❌ Error',2000);return;}
-    desbloquearBtn('btn-guardar','✅ Guardado!');
-    await cargarTab(tabActual);if(tabActual==='PAGOS HOY'||tabActual==='PAGOS DEL MES'){cargarTab('PAGOS HOY');cargarTab('PAGOS DEL MES');}
+    const res=await fetch(`/api/cupon/${currId}/guardar`,{method:'POST',body:fd});if(!res.ok){desbloquearBtn('btn-guardar','❌ Error',2000);return;}
+    desbloquearBtn('btn-guardar','✅ Guardado!');await cargarTab(tabActual);if(tabActual==='PAGOS HOY'||tabActual==='PAGOS DEL MES'){cargarTab('PAGOS HOY');cargarTab('PAGOS DEL MES');}
   }catch(e){desbloquearBtn('btn-guardar','❌ Sin conexión',2000);}
 }
 function enviarWA(){const tel=document.getElementById('e-tel').value.replace(/\D/g,'');const msg=encodeURIComponent(document.getElementById('e-msg').value);if(!tel)return alert('Sin numero de WhatsApp');window.open(`https://wa.me/549${tel}?text=${msg}`,'_blank');}
@@ -404,8 +397,7 @@ async function subirPDF(event){
   if(!res.ok){lbl.textContent='❌ Error al subir';fill.style.width='0%';return;}
   const{tarea_id}=await res.json();
   const interval=setInterval(async()=>{
-    try{
-      const pr=await fetch(`/api/progreso/${tarea_id}`);const pd=await pr.json();
+    try{const pr=await fetch(`/api/progreso/${tarea_id}`);const pd=await pr.json();
       if(pd.total>0){const pct=Math.round((pd.pagina/pd.total)*100);fill.style.width=Math.max(5,pct)+'%';lbl.textContent=`📄 Pagina ${pd.pagina}/${pd.total} — ${pd.detectados} detectados`;}
       else{fill.style.width='8%';lbl.textContent='Subiendo PDF al servidor...';}
       if(pd.estado==='listo'){fill.style.width='100%';const salt=pd.saltados?` (${pd.saltados} ya existian)`:'';lbl.textContent=`✅ ${pd.detectados} cupones importados${salt}`;clearInterval(interval);setTimeout(()=>{fill.style.width='0%';lbl.textContent='';},6000);cargarTab(tabActual);cargarBalance();}
@@ -427,9 +419,9 @@ async function mostrarIniciarMes(){
 async function mostrarCierre(){
   const res=await fetch(`/api/cierre?provincias=${encodeURIComponent(provincias.join(','))}`);const data=await res.json();
   let html='<h2>📝 Cierre del Mes</h2>';
-  data.forEach(d=>{html+=`<div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px"><div style="font-weight:700;font-size:14px;margin-bottom:8px">📍 ${d.provincia}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px"><div>✅ Cobrado: <strong>$${(d.cobrado_monto||0).toLocaleString('es-AR')}</strong> (${d.cobrado_cant})</div><div>⏳ Pendiente: <strong>$${(d.pendiente_monto||0).toLocaleString('es-AR')}</strong> (${d.pendiente_cant})</div><div>📄 Simples: ${d.simples_cant} — $${(d.simples_monto||0).toLocaleString('es-AR')}</div><div>📋 Dobles/Triples: ${d.dobles_cant} — $${(d.dobles_monto||0).toLocaleString('es-AR')}</div></div><div style="margin-top:8px;font-size:12px;color:#666">`;Object.entries(d.metodos).forEach(([m,v])=>{html+=`${m}: $${(v.monto||0).toLocaleString('es-AR')} (${v.cant}) &nbsp;`;});html+='</div></div>';});
+  data.forEach(d=>{html+=`<div style="background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px"><div style="font-weight:700;font-size:14px;margin-bottom:8px">📍 ${d.provincia}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px"><div>✅ $${(d.cobrado_monto||0).toLocaleString('es-AR')} (${d.cobrado_cant})</div><div>⏳ $${(d.pendiente_monto||0).toLocaleString('es-AR')} (${d.pendiente_cant})</div></div><div style="margin-top:6px;font-size:12px;color:#666">`;Object.entries(d.metodos).forEach(([m,v])=>{html+=`${m}: $${(v.monto||0).toLocaleString('es-AR')} (${v.cant}) &nbsp;`;});html+='</div></div>';});
   const totCob=data.reduce((s,d)=>s+(d.cobrado_monto||0),0),totPen=data.reduce((s,d)=>s+(d.pendiente_monto||0),0);
-  html+=`<div style="background:#27ae60;color:white;border-radius:8px;padding:12px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>TOTAL COBRADO<br><strong style="font-size:18px">$${totCob.toLocaleString('es-AR')}</strong></div><div>TOTAL PENDIENTE<br><strong style="font-size:18px">$${totPen.toLocaleString('es-AR')}</strong></div></div>`;
+  html+=`<div style="background:#27ae60;color:white;border-radius:8px;padding:12px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><div>COBRADO<br><strong style="font-size:18px">$${totCob.toLocaleString('es-AR')}</strong></div><div>PENDIENTE<br><strong style="font-size:18px">$${totPen.toLocaleString('es-AR')}</strong></div></div>`;
   html+=`<div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cancelar</button><button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarCierreDetalleTxt()">💾 Guardar .txt</button><button class="btn-modal btn-modal-rojo" onclick="confirmarCierre()">🗑️ Confirmar y Borrar</button></div>`;
   abrirModal(html);
 }
@@ -446,90 +438,44 @@ async function mostrarBalanceDiario(){
 async function cerrarCaja(){if(!confirm('¿Confirmar cierre de caja?'))return;const fd=new FormData();fd.append('usuario',usuario);await fetch('/api/caja/reset',{method:'POST',body:fd});cerrarModal();document.getElementById('lbl-caja').textContent='$0';alert('✅ Caja cerrada.');}
 
 // ════════════════════════════════════════════════════════
-// ── HELPERS ───────────────────────────────────────────
+// ── HELPERS GLOBALES ─────────────────────────────────
 // ════════════════════════════════════════════════════════
-function norm(s){return(s||'').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function norm(s){return(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function detectarBanco(texto){const t=norm(texto);for(const b of BANCOS_CONFIG){if(b.keys.some(k=>t.includes(norm(k))))return b;}return null;}
 
-function detectarBanco(texto){
-  const t=norm(texto);
-  for(const b of BANCOS_CONFIG){if(b.keys.some(k=>t.includes(norm(k))))return b;}
-  return null;
-}
-
-// Extrae todos los pares {dia, mes} encontrados en un texto libre.
-// Reconoce: DD/MM  DD.MM  DD-MM  DD/MM/AAAA  DD/MM/AA  AAAA-MM-DD
-function extraerDiasMes(texto){
+// Extrae todos los pares {dia, mes} que encuentra en un texto
+// Solo busca en el COMENTARIO — ignora fecha_cobro cuando se lo indique
+function extraerDiasMesDeTexto(texto){
   if(!texto)return[];
-  const s=texto.toString();
   const resultado=[];
-  // Patrón principal: DD/MM, DD.MM, DD-MM, DD/MM/AAAA, DD/MM/AA
-  const p1=/\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-]\d{2,4})?\b/g;
+  const patron=/\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-]\d{2,4})?\b/g;
   let m;
-  while((m=p1.exec(s))!==null){
-    const dia=parseInt(m[1]),mes=parseInt(m[2]);
-    if(dia>=1&&dia<=31&&mes>=1&&mes<=12)resultado.push({dia,mes});
+  while((m=patron.exec(texto.toString()))!==null){
+    const d=parseInt(m[1]),mo=parseInt(m[2]);
+    if(d>=1&&d<=31&&mo>=1&&mo<=12)resultado.push({dia:d,mes:mo});
   }
-  // Formato ISO: AAAA-MM-DD
-  const p2=/\b(\d{4})[\/\-](\d{2})[\/\-](\d{2})\b/g;
-  while((m=p2.exec(s))!==null){
-    const dia=parseInt(m[3]),mes=parseInt(m[2]);
-    if(dia>=1&&dia<=31&&mes>=1&&mes<=12)resultado.push({dia,mes});
+  // Formato AAAA-MM-DD
+  const p2=/\b\d{4}[\/\-](\d{2})[\/\-](\d{2})\b/g;
+  while((m=p2.exec(texto.toString()))!==null){
+    const d=parseInt(m[2]),mo=parseInt(m[1]);
+    if(d>=1&&d<=31&&mo>=1&&mo<=12)resultado.push({dia:d,mes:mo});
   }
   return resultado;
 }
 
-function enRangoDiaMes(f,desde,hasta){
-  const v=f.mes*100+f.dia;
-  return v>=desde.mes*100+desde.dia && v<=hasta.mes*100+hasta.dia;
+function enRango09a14Abril(fechas){
+  // Devuelve el dia (9-14) si alguna fecha del array cae en 09/04-14/04, sino null
+  for(const f of fechas){
+    if(f.mes===4 && f.dia>=9 && f.dia<=14)return f.dia;
+  }
+  return null;
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// cargarTodosCupones — LA CORRECCIÓN CLAVE
-//
-// Antes solo cargaba por provincia (/api/cupones?provincia=X).
-// Eso excluía todos los registros de "PAGOS HOY" y "PAGOS DEL MES"
-// que vienen de endpoints distintos (/api/cupones/hoy y /api/cupones/mes).
-//
-// Ahora cargamos las tres fuentes y deduplicamos por ID para no
-// contar dos veces el mismo cupón.
-// ══════════════════════════════════════════════════════════════════════
-async function cargarTodosCupones(){
-  const vistos=new Set();
-  let todos=[];
-
-  // 1. PAGOS DEL MES — contiene todos los pagados y pendientes del mes,
-  //    incluyendo los de "PAGOS HOY". Es la fuente más completa.
-  try{
-    const res=await fetch(`/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`);
-    const data=await res.json();
-    data.forEach(r=>{
-      if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
-    });
-  }catch(e){}
-
-  // 2. PAGOS HOY — por si el endpoint /mes no los incluye todos
-  try{
-    const res=await fetch(`/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`);
-    const data=await res.json();
-    data.forEach(r=>{
-      if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
-    });
-  }catch(e){}
-
-  // 3. Por provincia — para cupones de meses anteriores que aún estén
-  //    en la base (ej: pendientes viejos o pagados viejos no en /mes)
-  for(const prov of provincias){
-    try{
-      const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);
-      const data=await res.json();
-      data.forEach(r=>{
-        if(!r.provincia)r.provincia=prov;
-        if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
-      });
-    }catch(e){}
-  }
-
-  return todos;
+function esTransferenciaNoBanco(r){
+  const mp=norm(r.medio_pago||'');
+  if(!mp.includes('TRANSFERENCIA'))return false;
+  if(mp.includes('MERCADO')||mp.includes('MP '))return false;
+  return true;
 }
 
 function ordenarPorProvYCuenta(arr){
@@ -541,87 +487,47 @@ function ordenarPorProvYCuenta(arr){
 }
 
 // ════════════════════════════════════════════════════════
-// ── PENDIENTES DEL MES ────────────────────────────────
+// ── 💳 TRANSFERENCIAS DESDE PAGOS HOY + PAGOS DEL MES
+//    09/04 al 14/04 — fecha en COMENTARIO solamente
 // ════════════════════════════════════════════════════════
-async function mostrarPendientesMes(){
-  const ahora=new Date(),mesActual=ahora.getMonth(),anioActual=ahora.getFullYear();
-  const mesNombre=MESES_ES[mesActual],mesNum=String(mesActual+1).padStart(2,'0');
-  const todos=await cargarTodosCupones();
-  const lista=todos.filter(r=>{
-    if(r.estado==='PAGADO')return false;
-    if((r.cuotas_pendientes||0)>1)return false;
-    const fechas=extraerDiasMes(r.fecha_cobro||'');
-    if(fechas.some(f=>f.mes===mesActual+1))return true;
-    if(r.cta){const cta=norm(r.cta);if(cta===mesNum||cta===String(mesActual+1)||cta===norm(mesNombre)||cta===norm(mesNombre).substring(0,3))return true;}
-    return false;
-  });
-  if(!lista.length){abrirModal(`<h2>📋 Pendientes ${mesNombre} ${anioActual}</h2><p style="color:var(--muted);padding:20px 0">No hay clientes con exactamente 1 cuota pendiente de ${mesNombre}.</p><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);return;}
-  ordenarPorProvYCuenta(lista);
-  const totalMonto=lista.reduce((s,r)=>s+(r.monto||0),0);
-  const provs=new Set(lista.map(r=>r.provincia||'?')).size;
-  const ej=lista[0];
-  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
-  let tablaHTML='';
-  Object.entries(grupos).forEach(([pv,items])=>{
-    const sub=items.reduce((s,r)=>s+(r.monto||0),0);
-    tablaHTML+=`<tr class="prov-row-header"><td colspan="5">📍 ${pv} — ${items.length} cliente/s | $${sub.toLocaleString('es-AR')}</td></tr>`;
-    items.forEach(r=>{tablaHTML+=`<tr style="background:rgba(125,60,152,.04)"><td style="font-size:11px;color:#888">N°${r.cuenta||'S/D'}</td><td><strong>${r.nombre||''}</strong></td><td style="font-size:11px">${r.cta||''}</td><td style="font-size:11px">${r.fecha_cobro||''}</td><td><strong style="color:#7d3c98">$${(r.monto||0).toLocaleString('es-AR')}</strong></td></tr>`;});
-  });
-  const msgRec=`Hola ${ej.nombre||'CLIENTE'}! Le recordamos que tiene pendiente el pago de la cuota de ${mesNombre} de Dental White por $${(ej.monto||0).toLocaleString('es-AR')}. Por favor regularice su situación.`;
-  const msgBaja=`Hola ${ej.nombre||'CLIENTE'}! Registra la cuota de ${mesNombre} impaga por $${(ej.monto||0).toLocaleString('es-AR')}. Le pedimos regularizar a la brevedad, de lo contrario se procederá a la baja del servicio.`;
-  abrirModal(`<h2>📋 Pendientes ${mesNombre} ${anioActual} — 1 cuota</h2><div class="resumen-mes"><div class="resumen-card"><div class="rc-lbl">Clientes</div><div class="rc-val" style="color:#7d3c98">${lista.length}</div></div><div class="resumen-card"><div class="rc-lbl">Provincias</div><div class="rc-val" style="color:#2980b9">${provs}</div></div><div class="resumen-card"><div class="rc-lbl">Total a cobrar</div><div class="rc-val" style="color:var(--rojo)">$${totalMonto.toLocaleString('es-AR')}</div></div></div><table class="modal-table"><thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>CUOTA</th><th>FECHA</th><th>MONTO</th></tr></thead><tbody>${tablaHTML}</tbody></table><div class="wa-section"><h3>📱 Modelos de mensaje WhatsApp</h3><div class="wa-tabs"><button class="wa-tab active" onclick="switchWATab(this,'wa-rec')">Recordatorio</button><button class="wa-tab" onclick="switchWATab(this,'wa-baja')">Aviso de baja</button></div><div id="wa-rec" class="wa-msg-box">${msgRec}</div><div id="wa-baja" class="wa-msg-box" style="display:none">${msgBaja}</div><div style="font-size:11px;color:var(--muted);margin-top:6px">* Ejemplo con el primer cliente.</div></div><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#7d3c98;color:white" onclick="descargarPendientesMesTxt()">💾 Guardar .txt</button></div>`);
-}
-function switchWATab(btn,targetId){document.querySelectorAll('.wa-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');['wa-rec','wa-baja'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=id===targetId?'block':'none';});}
-async function descargarPendientesMesTxt(){
-  const ahora=new Date(),mesActual=ahora.getMonth(),anioActual=ahora.getFullYear(),mesNombre=MESES_ES[mesActual],mesNum=String(mesActual+1).padStart(2,'0');
-  const todos=await cargarTodosCupones();
-  const lista=todos.filter(r=>{if(r.estado==='PAGADO'||(r.cuotas_pendientes||0)>1)return false;const fechas=extraerDiasMes(r.fecha_cobro||'');if(fechas.some(f=>f.mes===mesActual+1))return true;if(r.cta){const cta=norm(r.cta);if(cta===mesNum||cta===String(mesActual+1)||cta===norm(mesNombre)||cta===norm(mesNombre).substring(0,3))return true;}return false;});
-  ordenarPorProvYCuenta(lista);
-  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
-  const tot=lista.reduce((s,r)=>s+(r.monto||0),0);const hoy=ahora.toLocaleDateString('es-AR');
-  let txt=`DENTAL WHITE — PENDIENTES ${mesNombre} ${anioActual}\n${hoy}\n${'='.repeat(60)}\nTotal: ${lista.length} clientes | $${tot.toLocaleString('es-AR')}\n`;
-  Object.entries(grupos).forEach(([pv,items])=>{const sub=items.reduce((s,r)=>s+(r.monto||0),0);txt+=`\n${'─'.repeat(60)}\n${pv.toUpperCase()} — ${items.length} — $${sub.toLocaleString('es-AR')}\n${'─'.repeat(60)}\n`;items.forEach((r,i)=>{txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').padEnd(8)} ${(r.nombre||'').padEnd(30)} $${(r.monto||0).toLocaleString('es-AR')}\n`;});});
-  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`pendientes_${mesNombre.toLowerCase()}_${anioActual}.txt`;a.click();URL.revokeObjectURL(url);
-}
+async function mostrarTransferenciasDesdeVistas(){
+  // Cargar datos frescos de ambas vistas
+  const [resHoy, resMes] = await Promise.all([
+    fetch(`/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`),
+    fetch(`/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`)
+  ]);
+  const [datHoy, datMes] = await Promise.all([resHoy.json(), resMes.json()]);
 
-// ════════════════════════════════════════════════════════
-// ── TRANSFERENCIAS 09/04 AL 14/04 ────────────────────
-// Busca en COMENTARIO (campo principal) y en fecha_cobro.
-// Incluye TODOS los pagos con TRANSFERENCIA en ese rango,
-// con o sin banco reconocido.
-// ════════════════════════════════════════════════════════
-async function mostrarTransferenciasBancarias(){
-  const DESDE={dia:9, mes:4};
-  const HASTA={dia:14,mes:4};
+  // Unir y deduplicar por id
+  const visto=new Set();
+  const todos=[];
+  for(const r of [...datHoy,...datMes]){
+    if(!visto.has(r.id)){visto.add(r.id);todos.push(r);}
+  }
 
-  const todos=await cargarTodosCupones();
-
-  const lista=todos.filter(r=>{
-    // 1. Solo PAGADO
-    if(r.estado!=='PAGADO')return false;
-    // 2. Método TRANSFERENCIA, excluir MERCADO PAGO
-    const mp=norm(r.medio_pago||'');
-    if(!mp.includes('TRANSFERENCIA'))return false;
-    if(mp.includes('MERCADO')||mp.includes('MP'))return false;
-    // 3. Fecha 09-14/04 en COMENTARIO o en fecha_cobro
-    const todasFechas=[
-      ...extraerDiasMes(r.comentario||''),
-      ...extraerDiasMes(r.fecha_cobro||'')
-    ];
-    return todasFechas.some(f=>enRangoDiaMes(f,DESDE,HASTA));
+  // Filtro:
+  //   1. PAGADO
+  //   2. TRANSFERENCIA (no Mercado Pago / MP)
+  //   3. Fecha 09-14/04 encontrada SOLO en el comentario
+  const lista=[];
+  todos.forEach(r=>{
+    if(r.estado!=='PAGADO')return;
+    if(!esTransferenciaNoBanco(r))return;
+    const fechasEnComentario=extraerDiasMesDeTexto(r.comentario);
+    const dia=enRango09a14Abril(fechasEnComentario);
+    if(dia!==null){r._diaDetectado=dia;lista.push(r);}
   });
 
   if(!lista.length){
     abrirModal(`
-      <h2>🏦 Transferencias — 09/04 al 14/04</h2>
-      <div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px">
-        <strong>No se encontraron transferencias en ese rango.</strong><br><br>
-        El sistema busca en <u>todos los registros</u> (PAGOS HOY, PAGOS DEL MES y por provincia) registros con:<br><br>
-        ✔ Estado: <strong>PAGADO</strong><br>
-        ✔ Método: <strong>TRANSFERENCIA</strong> (no Mercado Pago)<br>
-        ✔ Fecha entre <strong>09/04 y 14/04</strong> en el campo <strong>COMENTARIO</strong> o en <strong>FECHA COBRO</strong><br><br>
-        Formatos de fecha aceptados en comentario:<br>
-        <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code> · <code>2025-04-09</code>
+      <h2>💳 Transferencias Pagadas — 09/04 al 14/04</h2>
+      <div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;font-size:13px">
+        <strong>No se encontraron pagos.</strong><br><br>
+        El sistema buscó en <strong>PAGOS HOY</strong> y <strong>PAGOS DEL MES</strong> registros con:<br>
+        ✔ Estado = PAGADO<br>
+        ✔ Método = TRANSFERENCIA (no Mercado Pago)<br>
+        ✔ Fecha 09/04–14/04 escrita en el campo <strong>Comentario</strong><br>
+        ✔ Formatos aceptados: <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code>
       </div>
       <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
     return;
@@ -634,17 +540,12 @@ async function mostrarTransferenciasBancarias(){
   // Resumen por día
   const porDia={};
   for(let d=9;d<=14;d++)porDia[d]={cant:0,monto:0};
-  lista.forEach(r=>{
-    const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-    const enAbril=tf.filter(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
-    if(enAbril.length){const dia=enAbril[0].dia;if(porDia[dia]){porDia[dia].cant++;porDia[dia].monto+=(r.monto||0);}}
-  });
-  const DIAS_LABELS={9:'Mié 9',10:'Jue 10',11:'Vie 11',12:'Sáb 12',13:'Dom 13',14:'Lun 14'};
+  lista.forEach(r=>{if(porDia[r._diaDetectado]){porDia[r._diaDetectado].cant++;porDia[r._diaDetectado].monto+=(r.monto||0);}});
   const diaCards=Object.entries(porDia).filter(([,v])=>v.cant>0).map(([dia,v])=>
-    `<div class="dia-card"><div class="dc-dia">${DIAS_LABELS[dia]||dia+'/04'}</div><div class="dc-monto">$${v.monto.toLocaleString('es-AR')}</div><div class="dc-cant">${v.cant} pago/s</div></div>`
+    `<div class="dia-card"><div class="dc-dia">${DIAS_LABELS[dia]}</div><div class="dc-monto">$${v.monto.toLocaleString('es-AR')}</div><div class="dc-cant">${v.cant} pago/s</div></div>`
   ).join('');
 
-  // Tabla agrupada por provincia
+  // Tabla por provincia
   const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
   let tablaHTML='';
   Object.entries(grupos).forEach(([pv,items])=>{
@@ -653,68 +554,156 @@ async function mostrarTransferenciasBancarias(){
     items.forEach(r=>{
       const b=detectarBanco(r.comentario);
       const bancoBadge=b?`<span class="badge-banco" style="background:${b.color}">${b.nombre}</span>`:`<span style="font-size:11px;color:var(--muted)">—</span>`;
-      const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-      const enAbril=tf.find(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
-      const fechaStr=enAbril?`${String(enAbril.dia).padStart(2,'0')}/04`:(r.fecha_cobro||'');
-      tablaHTML+=`<tr>
-        <td style="font-size:11px;color:#888">N°${r.cuenta||'S/D'}</td>
-        <td><strong>${r.nombre||''}</strong></td>
-        <td style="font-size:11px">${r.provincia||''}</td>
-        <td>${bancoBadge}</td>
-        <td style="font-size:11px;font-weight:600;color:#1a6b8a">${fechaStr}</td>
-        <td><strong style="color:#1a6b8a">$${(r.monto||0).toLocaleString('es-AR')}</strong></td>
-      </tr>
-      <tr><td colspan="6" class="comentario-cell" style="max-width:none;padding:2px 10px 8px;border-bottom:1px solid rgba(0,0,0,.06);white-space:normal">${r.comentario||''}</td></tr>`;
+      const nro=r.cuenta&&r.cuenta!=='S/D'?`N°${r.cuenta}`:'S/D';
+      tablaHTML+=`
+        <tr>
+          <td style="font-size:11px;color:#888">${nro}</td>
+          <td><strong>${r.nombre||''}</strong></td>
+          <td style="font-size:11px;font-weight:600;color:#0e7c7b">${String(r._diaDetectado).padStart(2,'0')}/04</td>
+          <td>${bancoBadge}</td>
+          <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#555" title="${r.comentario||''}">${r.comentario||''}</td>
+          <td><strong style="color:#0e7c7b">$${(r.monto||0).toLocaleString('es-AR')}</strong></td>
+        </tr>`;
     });
   });
 
   abrirModal(`
-    <h2>🏦 Transferencias — 09/04 al 14/04/2025</h2>
-    <div class="resumen-totales">
-      <div class="res-card"><div class="rc-lbl">Total pagos</div><div class="rc-val" style="color:#1a6b8a">${lista.length}</div></div>
+    <h2>💳 Transferencias Pagadas — 09/04 al 14/04</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Fuente: PAGOS HOY + PAGOS DEL MES · Fecha detectada en comentario</p>
+    <div class="resumen-3">
+      <div class="res-card"><div class="rc-lbl">Total pagos</div><div class="rc-val" style="color:#0e7c7b">${lista.length}</div></div>
       <div class="res-card"><div class="rc-lbl">Provincias</div><div class="rc-val" style="color:#7d3c98">${provs}</div></div>
       <div class="res-card"><div class="rc-lbl">Total cobrado</div><div class="rc-val" style="color:var(--verde)">$${totalMonto.toLocaleString('es-AR')}</div></div>
     </div>
-    ${diaCards?`<div class="resumen-dias">${diaCards}</div>`:''}
+    <div class="resumen-dias">${diaCards}</div>
     <table class="modal-table">
-      <thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>PROV.</th><th>BANCO</th><th>FECHA</th><th>MONTO</th></tr></thead>
+      <thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>FECHA</th><th>BANCO</th><th>COMENTARIO</th><th>MONTO</th></tr></thead>
       <tbody>${tablaHTML}</tbody>
     </table>
-    <div style="font-size:11px;color:var(--muted);margin-top:8px">
-      💡 La fecha y el banco se detectan del campo <strong>COMENTARIO</strong>. Formatos válidos: <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code>
-    </div>
     <div class="modal-footer">
       <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
-      <button class="btn-modal" style="background:#1a6b8a;color:white" onclick="descargarTransferenciasTxt()">💾 Guardar .txt</button>
+      <button class="btn-modal" style="background:#0e7c7b;color:white" onclick="descargarTransferenciasVistaTxt()">💾 Guardar .txt</button>
     </div>`);
 }
 
-async function descargarTransferenciasTxt(){
-  const DESDE={dia:9,mes:4},HASTA={dia:14,mes:4};
-  const todos=await cargarTodosCupones();
-  const lista=todos.filter(r=>{
-    if(r.estado!=='PAGADO')return false;
-    const mp=norm(r.medio_pago||'');if(!mp.includes('TRANSFERENCIA')||mp.includes('MERCADO')||mp.includes('MP'))return false;
-    const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-    return tf.some(f=>enRangoDiaMes(f,DESDE,HASTA));
+// Descarga TXT para transferencias desde vistas
+async function descargarTransferenciasVistaTxt(){
+  const[resHoy,resMes]=await Promise.all([
+    fetch(`/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`),
+    fetch(`/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`)
+  ]);
+  const[datHoy,datMes]=await Promise.all([resHoy.json(),resMes.json()]);
+  const visto=new Set();const todos=[];
+  for(const r of[...datHoy,...datMes]){if(!visto.has(r.id)){visto.add(r.id);todos.push(r);}}
+  const lista=[];
+  todos.forEach(r=>{
+    if(r.estado!=='PAGADO')return;if(!esTransferenciaNoBanco(r))return;
+    const fc=extraerDiasMesDeTexto(r.comentario);const dia=enRango09a14Abril(fc);
+    if(dia!==null){r._diaDetectado=dia;lista.push(r);}
   });
   ordenarPorProvYCuenta(lista);
   const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
   const tot=lista.reduce((s,r)=>s+(r.monto||0),0);
-  let txt=`DENTAL WHITE — TRANSFERENCIAS BANCARIAS\nPERIODO: 09/04 al 14/04/2025\n${'='.repeat(65)}\nTotal: ${lista.length} pagos | $${tot.toLocaleString('es-AR')}\n`;
+  let txt=`DENTAL WHITE — TRANSFERENCIAS PAGADAS 09/04 AL 14/04\n${'='.repeat(65)}\nFuente: PAGOS HOY + PAGOS DEL MES\nTotal: ${lista.length} pagos | $${tot.toLocaleString('es-AR')}\n`;
   Object.entries(grupos).forEach(([pv,items])=>{
     const sub=items.reduce((s,r)=>s+(r.monto||0),0);
     txt+=`\n${'─'.repeat(65)}\n${pv.toUpperCase()} — ${items.length} pago/s — $${sub.toLocaleString('es-AR')}\n${'─'.repeat(65)}\n`;
     items.forEach((r,i)=>{
       const b=detectarBanco(r.comentario);const bn=b?b.nombre:'';
-      const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-      const ea=tf.find(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
-      const fd=ea?`${String(ea.dia).padStart(2,'0')}/04`:(r.fecha_cobro||'');
+      const fd=`${String(r._diaDetectado).padStart(2,'0')}/04`;
       txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').padEnd(8)} ${(r.nombre||'').padEnd(28)} ${fd.padEnd(8)} ${bn.padEnd(12)} $${(r.monto||0).toLocaleString('es-AR')}\n`;
-      if(r.comentario)txt+=`     Comentario: ${r.comentario}\n`;
+      if(r.comentario)txt+=`     > ${r.comentario}\n`;
     });
   });
-  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='transferencias_09_14_abril.txt';a.click();URL.revokeObjectURL(url);
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='transferencias_pagadas_09_14_abril.txt';a.click();URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════
+// ── 🏦 TRANSFERENCIAS BANCARIAS — todos los cupones
+// ════════════════════════════════════════════════════════
+async function cargarTodosCupones(){
+  let todos=[];
+  for(const prov of provincias){
+    try{const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);const data=await res.json();data.forEach(r=>{if(!r.provincia)r.provincia=prov;});todos=todos.concat(data);}catch(e){}
+  }
+  return todos;
+}
+async function mostrarTransferenciasBancarias(){
+  const todos=await cargarTodosCupones();
+  const lista=[];
+  todos.forEach(r=>{
+    if(r.estado!=='PAGADO')return;if(!esTransferenciaNoBanco(r))return;
+    const fechasComentario=extraerDiasMesDeTexto(r.comentario);
+    const dia=enRango09a14Abril(fechasComentario);
+    if(dia!==null){r._diaDetectado=dia;lista.push(r);}
+  });
+  if(!lista.length){
+    abrirModal(`<h2>🏦 Transferencias Bancarias — 09/04 al 14/04</h2><div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;font-size:13px"><strong>No se encontraron pagos.</strong><br><br>Verificá que el comentario incluya la fecha (ej: <code>09/04</code>, <code>10.04</code>) y el método sea TRANSFERENCIA.</div><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
+    return;
+  }
+  ordenarPorProvYCuenta(lista);
+  const totalMonto=lista.reduce((s,r)=>s+(r.monto||0),0);
+  const provs=new Set(lista.map(r=>r.provincia||'?')).size;
+  const porDia={};for(let d=9;d<=14;d++)porDia[d]={cant:0,monto:0};
+  lista.forEach(r=>{if(porDia[r._diaDetectado]){porDia[r._diaDetectado].cant++;porDia[r._diaDetectado].monto+=(r.monto||0);}});
+  const diaCards=Object.entries(porDia).filter(([,v])=>v.cant>0).map(([dia,v])=>`<div class="dia-card"><div class="dc-dia">${DIAS_LABELS[dia]}</div><div class="dc-monto">$${v.monto.toLocaleString('es-AR')}</div><div class="dc-cant">${v.cant} pago/s</div></div>`).join('');
+  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
+  let tablaHTML='';
+  Object.entries(grupos).forEach(([pv,items])=>{
+    const sub=items.reduce((s,r)=>s+(r.monto||0),0);
+    tablaHTML+=`<tr class="prov-row-header"><td colspan="6">📍 ${pv} — ${items.length} pago/s | $${sub.toLocaleString('es-AR')}</td></tr>`;
+    items.forEach(r=>{
+      const b=detectarBanco(r.comentario);const bancoBadge=b?`<span class="badge-banco" style="background:${b.color}">${b.nombre}</span>`:`<span style="font-size:11px;color:var(--muted)">—</span>`;
+      tablaHTML+=`<tr><td style="font-size:11px;color:#888">N°${r.cuenta||'S/D'}</td><td><strong>${r.nombre||''}</strong></td><td style="font-size:11px;font-weight:600;color:#1a6b8a">${String(r._diaDetectado).padStart(2,'0')}/04</td><td>${bancoBadge}</td><td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#555" title="${r.comentario||''}">${r.comentario||''}</td><td><strong style="color:#1a6b8a">$${(r.monto||0).toLocaleString('es-AR')}</strong></td></tr>`;
+    });
+  });
+  abrirModal(`<h2>🏦 Transferencias Bancarias — 09/04 al 14/04</h2><div class="resumen-3"><div class="res-card"><div class="rc-lbl">Total pagos</div><div class="rc-val" style="color:#1a6b8a">${lista.length}</div></div><div class="res-card"><div class="rc-lbl">Provincias</div><div class="rc-val" style="color:#7d3c98">${provs}</div></div><div class="res-card"><div class="rc-lbl">Total cobrado</div><div class="rc-val" style="color:var(--verde)">$${totalMonto.toLocaleString('es-AR')}</div></div></div><div class="resumen-dias">${diaCards}</div><table class="modal-table"><thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>FECHA</th><th>BANCO</th><th>COMENTARIO</th><th>MONTO</th></tr></thead><tbody>${tablaHTML}</tbody></table><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#1a6b8a;color:white" onclick="descargarTransferenciasTxt()">💾 Guardar .txt</button></div>`);
+}
+async function descargarTransferenciasTxt(){
+  const todos=await cargarTodosCupones();const lista=[];
+  todos.forEach(r=>{if(r.estado!=='PAGADO')return;if(!esTransferenciaNoBanco(r))return;const fc=extraerDiasMesDeTexto(r.comentario);const dia=enRango09a14Abril(fc);if(dia!==null){r._diaDetectado=dia;lista.push(r);}});
+  ordenarPorProvYCuenta(lista);
+  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
+  const tot=lista.reduce((s,r)=>s+(r.monto||0),0);
+  let txt=`DENTAL WHITE — TRANSFERENCIAS BANCARIAS 09/04 AL 14/04\n${'='.repeat(65)}\nTotal: ${lista.length} pagos | $${tot.toLocaleString('es-AR')}\n`;
+  Object.entries(grupos).forEach(([pv,items])=>{const sub=items.reduce((s,r)=>s+(r.monto||0),0);txt+=`\n${'─'.repeat(65)}\n${pv.toUpperCase()} — ${items.length} pago/s — $${sub.toLocaleString('es-AR')}\n${'─'.repeat(65)}\n`;items.forEach((r,i)=>{const b=detectarBanco(r.comentario);const bn=b?b.nombre:'';const fd=`${String(r._diaDetectado).padStart(2,'0')}/04`;txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').padEnd(8)} ${(r.nombre||'').padEnd(28)} ${fd.padEnd(8)} ${bn.padEnd(12)} $${(r.monto||0).toLocaleString('es-AR')}\n`;if(r.comentario)txt+=`     > ${r.comentario}\n`;});});
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='transferencias_bancarias_09_14_abril.txt';a.click();URL.revokeObjectURL(url);
+}
+
+// ── PENDIENTES DEL MES ────────────────────────────────
+async function mostrarPendientesMes(){
+  const ahora=new Date(),mesActual=ahora.getMonth(),anioActual=ahora.getFullYear();
+  const mesNombre=MESES_ES[mesActual],mesNum=String(mesActual+1).padStart(2,'0');
+  let todos=[];
+  for(const prov of provincias){try{const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);const data=await res.json();data.forEach(r=>{if(!r.provincia)r.provincia=prov;});todos=todos.concat(data);}catch(e){}}
+  const lista=todos.filter(r=>{
+    if(r.estado==='PAGADO')return false;if((r.cuotas_pendientes||0)>1)return false;
+    const fechas=extraerDiasMesDeTexto(r.fecha_cobro||'');if(fechas.some(f=>f.mes===mesActual+1))return true;
+    if(r.cta){const cta=norm(r.cta);if(cta===mesNum||cta===String(mesActual+1)||cta===norm(mesNombre)||cta===norm(mesNombre).substring(0,3))return true;}
+    return false;
+  });
+  if(!lista.length){abrirModal(`<h2>📋 Pendientes ${mesNombre} ${anioActual}</h2><p style="color:var(--muted);padding:20px 0">No hay clientes con exactamente 1 cuota pendiente de ${mesNombre}.</p><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);return;}
+  ordenarPorProvYCuenta(lista);
+  const totalMonto=lista.reduce((s,r)=>s+(r.monto||0),0);
+  const provs=new Set(lista.map(r=>r.provincia||'?')).size;
+  const ej=lista[0];
+  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
+  let tablaHTML='';Object.entries(grupos).forEach(([pv,items])=>{const sub=items.reduce((s,r)=>s+(r.monto||0),0);tablaHTML+=`<tr class="prov-row-header"><td colspan="5">📍 ${pv} — ${items.length} cliente/s | $${sub.toLocaleString('es-AR')}</td></tr>`;items.forEach(r=>{tablaHTML+=`<tr style="background:rgba(125,60,152,.04)"><td style="font-size:11px;color:#888">N°${r.cuenta||'S/D'}</td><td><strong>${r.nombre||''}</strong></td><td style="font-size:11px">${r.cta||''}</td><td style="font-size:11px">${r.fecha_cobro||''}</td><td><strong style="color:#7d3c98">$${(r.monto||0).toLocaleString('es-AR')}</strong></td></tr>`;});});
+  const msgRec=`Hola ${ej.nombre||'CLIENTE'}! Le recordamos que tiene pendiente el pago de la cuota de ${mesNombre} de Dental White por $${(ej.monto||0).toLocaleString('es-AR')}. Por favor regularice su situación.`;
+  const msgBaja=`Hola ${ej.nombre||'CLIENTE'}! Registra la cuota de ${mesNombre} impaga por $${(ej.monto||0).toLocaleString('es-AR')}. Le pedimos regularizar a la brevedad, de lo contrario se procederá a la baja del servicio.`;
+  abrirModal(`<h2>📋 Pendientes ${mesNombre} ${anioActual} — 1 cuota</h2><div class="resumen-mes"><div class="resumen-card"><div class="rc-lbl">Clientes</div><div class="rc-val" style="color:#7d3c98">${lista.length}</div></div><div class="resumen-card"><div class="rc-lbl">Provincias</div><div class="rc-val" style="color:#2980b9">${provs}</div></div><div class="resumen-card"><div class="rc-lbl">Total a cobrar</div><div class="rc-val" style="color:var(--rojo)">$${totalMonto.toLocaleString('es-AR')}</div></div></div><table class="modal-table"><thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>CUOTA</th><th>FECHA</th><th>MONTO</th></tr></thead><tbody>${tablaHTML}</tbody></table><div class="wa-section"><h3>📱 Modelos de mensaje WhatsApp</h3><div class="wa-tabs"><button class="wa-tab active" onclick="switchWATab(this,'wa-rec')">Recordatorio</button><button class="wa-tab" onclick="switchWATab(this,'wa-baja')">Aviso de baja</button></div><div id="wa-rec" class="wa-msg-box">${msgRec}</div><div id="wa-baja" class="wa-msg-box" style="display:none">${msgBaja}</div></div><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#7d3c98;color:white" onclick="descargarPendientesMesTxt()">💾 Guardar .txt</button></div>`);
+}
+function switchWATab(btn,targetId){document.querySelectorAll('.wa-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');['wa-rec','wa-baja'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=id===targetId?'block':'none';});}
+async function descargarPendientesMesTxt(){
+  const ahora=new Date(),mesActual=ahora.getMonth(),anioActual=ahora.getFullYear(),mesNombre=MESES_ES[mesActual],mesNum=String(mesActual+1).padStart(2,'0');
+  let todos=[];for(const prov of provincias){try{const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);const data=await res.json();data.forEach(r=>{if(!r.provincia)r.provincia=prov;});todos=todos.concat(data);}catch(e){}}
+  const lista=todos.filter(r=>{if(r.estado==='PAGADO'||(r.cuotas_pendientes||0)>1)return false;const fechas=extraerDiasMesDeTexto(r.fecha_cobro||'');if(fechas.some(f=>f.mes===mesActual+1))return true;if(r.cta){const cta=norm(r.cta);if(cta===mesNum||cta===String(mesActual+1)||cta===norm(mesNombre)||cta===norm(mesNombre).substring(0,3))return true;}return false;});
+  ordenarPorProvYCuenta(lista);
+  const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
+  const tot=lista.reduce((s,r)=>s+(r.monto||0),0);const hoy=ahora.toLocaleDateString('es-AR');
+  let txt=`DENTAL WHITE — PENDIENTES ${mesNombre} ${anioActual}\n${hoy}\n${'='.repeat(60)}\nTotal: ${lista.length} clientes | $${tot.toLocaleString('es-AR')}\n`;
+  Object.entries(grupos).forEach(([pv,items])=>{const sub=items.reduce((s,r)=>s+(r.monto||0),0);txt+=`\n${'─'.repeat(60)}\n${pv.toUpperCase()} — ${items.length} — $${sub.toLocaleString('es-AR')}\n${'─'.repeat(60)}\n`;items.forEach((r,i)=>{txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').padEnd(8)} ${(r.nombre||'').padEnd(30)} $${(r.monto||0).toLocaleString('es-AR')}\n`;});});
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`pendientes_${mesNombre.toLowerCase()}_${anioActual}.txt`;a.click();URL.revokeObjectURL(url);
 }
 
 // ── DEUDORES 2+ ───────────────────────────────────────
@@ -727,12 +716,11 @@ async function mostrarDeudores(){
 
 // ── DEUDORES 3+ ───────────────────────────────────────
 async function mostrarDeudores3(){
-  const res=await fetch(`/api/deudores?provincias=${encodeURIComponent(provincias.join(','))}`);const todos=await res.json();
-  const data=todos.filter(c=>c.cupones.length>=3);
+  const res=await fetch(`/api/deudores?provincias=${encodeURIComponent(provincias.join(','))}`);const todos=await res.json();const data=todos.filter(c=>c.cupones.length>=3);
   if(!data.length){abrirModal(`<h2>🚨 3+ Cuotas Pendientes</h2><p style="color:var(--muted);padding:20px 0">Sin clientes con 3 o más cuotas pendientes.</p><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);return;}
   const tot=data.reduce((s,c)=>s+(c.total||0),0);
   let rows=data.map(c=>{const det=c.cupones.map(d=>`<div style="font-size:11px;color:#555">Cuota ${d.cta} ${d.mes} — $${(d.monto||0).toLocaleString('es-AR')}</div>`).join('');const bc=c.cupones.length>=5?'#7b241c':'#922b21';return`<tr style="background:rgba(231,76,60,.07)"><td><span style="font-size:10px;color:#888">N°${c.cuenta||'S/D'}</span><br><strong>${c.nombre}</strong></td><td style="font-size:11px">${c.provincia}</td><td style="text-align:center"><span style="background:${bc};color:white;border-radius:12px;padding:3px 11px;font-weight:700;font-size:13px">${c.cupones.length}</span></td><td>${det}</td><td><strong style="color:#922b21">$${(c.total||0).toLocaleString('es-AR')}</strong></td></tr>`;}).join('');
-  abrirModal(`<h2>🚨 Clientes con 3+ Cuotas Pendientes</h2><div class="alerta-banner">⚠️ ${data.length} cliente/s — Total adeudado: $${tot.toLocaleString('es-AR')}</div><table class="modal-table"><thead><tr><th>Afiliado</th><th>Prov</th><th>Cuotas</th><th>Detalle</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarDeudores3Txt()">💾 Guardar .txt</button></div>`);
+  abrirModal(`<h2>🚨 Clientes con 3+ Cuotas Pendientes</h2><div class="alerta-banner">⚠️ ${data.length} cliente/s — Total: $${tot.toLocaleString('es-AR')}</div><table class="modal-table"><thead><tr><th>Afiliado</th><th>Prov</th><th>Cuotas</th><th>Detalle</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table><div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button><button class="btn-modal" style="background:#2980b9;color:white" onclick="descargarDeudores3Txt()">💾 Guardar .txt</button></div>`);
 }
 async function descargarDeudores3Txt(){
   const res=await fetch(`/api/deudores?provincias=${encodeURIComponent(provincias.join(','))}`);const todos=await res.json();const data=todos.filter(c=>c.cupones.length>=3);
