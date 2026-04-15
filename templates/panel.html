@@ -231,7 +231,6 @@ input:checked+.slider::before{transform:translateX(20px)}
 <script>
 const MESES_ES=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
 
-// Bancos reconocidos — solo para mostrar badge, NO filtran
 const BANCOS_CONFIG=[
   {nombre:'SANTANDER',keys:['SANTANDER'],color:'#c0392b'},
   {nombre:'FRANCÉS',  keys:['FRANCES','FRANCÉS'],color:'#1a5276'},
@@ -247,7 +246,7 @@ window.onload=()=>{
   provincias=JSON.parse(sessionStorage.getItem('provincias')||'[]');
   if(!usuario){window.location.href='/';return;}
   document.getElementById('lbl-usuario').textContent=usuario;
-  crearTabs(); cargarBalance();
+  crearTabs();cargarBalance();
 };
 function logout(){sessionStorage.clear();window.location.href='/';}
 
@@ -449,7 +448,7 @@ async function cerrarCaja(){if(!confirm('¿Confirmar cierre de caja?'))return;co
 // ════════════════════════════════════════════════════════
 // ── HELPERS ───────────────────────────────────────────
 // ════════════════════════════════════════════════════════
-function norm(s){return(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function norm(s){return(s||'').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
 
 function detectarBanco(texto){
   const t=norm(texto);
@@ -457,42 +456,89 @@ function detectarBanco(texto){
   return null;
 }
 
-// Extrae todos los pares {dia, mes} que encuentre en un texto
+// Extrae todos los pares {dia, mes} encontrados en un texto libre.
 // Reconoce: DD/MM  DD.MM  DD-MM  DD/MM/AAAA  DD/MM/AA  AAAA-MM-DD
 function extraerDiasMes(texto){
   if(!texto)return[];
   const s=texto.toString();
   const resultado=[];
-  // Buscar todos los patrones de fecha dentro del texto
-  const patron=/\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-]\d{2,4})?\b/g;
+  // Patrón principal: DD/MM, DD.MM, DD-MM, DD/MM/AAAA, DD/MM/AA
+  const p1=/\b(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-]\d{2,4})?\b/g;
   let m;
-  while((m=patron.exec(s))!==null){
+  while((m=p1.exec(s))!==null){
     const dia=parseInt(m[1]),mes=parseInt(m[2]);
-    if(dia>=1&&dia<=31&&mes>=1&&mes<=12){resultado.push({dia,mes});}
+    if(dia>=1&&dia<=31&&mes>=1&&mes<=12)resultado.push({dia,mes});
   }
-  // También intentar formato AAAA-MM-DD
-  const patron2=/\b(\d{4})[\/\-](\d{2})[\/\-](\d{2})\b/g;
-  while((m=patron2.exec(s))!==null){
+  // Formato ISO: AAAA-MM-DD
+  const p2=/\b(\d{4})[\/\-](\d{2})[\/\-](\d{2})\b/g;
+  while((m=p2.exec(s))!==null){
     const dia=parseInt(m[3]),mes=parseInt(m[2]);
-    if(dia>=1&&dia<=31&&mes>=1&&mes<=12){resultado.push({dia,mes});}
+    if(dia>=1&&dia<=31&&mes>=1&&mes<=12)resultado.push({dia,mes});
   }
   return resultado;
 }
 
-// Compara {dia,mes} contra rango [{dia,mes}, {dia,mes}] — ignora año
-function enRangoDiaMes(diaMes,desde,hasta){
-  const v=diaMes.mes*100+diaMes.dia;
+function enRangoDiaMes(f,desde,hasta){
+  const v=f.mes*100+f.dia;
   return v>=desde.mes*100+desde.dia && v<=hasta.mes*100+hasta.dia;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// cargarTodosCupones — LA CORRECCIÓN CLAVE
+//
+// Antes solo cargaba por provincia (/api/cupones?provincia=X).
+// Eso excluía todos los registros de "PAGOS HOY" y "PAGOS DEL MES"
+// que vienen de endpoints distintos (/api/cupones/hoy y /api/cupones/mes).
+//
+// Ahora cargamos las tres fuentes y deduplicamos por ID para no
+// contar dos veces el mismo cupón.
+// ══════════════════════════════════════════════════════════════════════
 async function cargarTodosCupones(){
+  const vistos=new Set();
   let todos=[];
+
+  // 1. PAGOS DEL MES — contiene todos los pagados y pendientes del mes,
+  //    incluyendo los de "PAGOS HOY". Es la fuente más completa.
+  try{
+    const res=await fetch(`/api/cupones/mes?provincias=${encodeURIComponent(provincias.join(','))}`);
+    const data=await res.json();
+    data.forEach(r=>{
+      if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
+    });
+  }catch(e){}
+
+  // 2. PAGOS HOY — por si el endpoint /mes no los incluye todos
+  try{
+    const res=await fetch(`/api/cupones/hoy?provincias=${encodeURIComponent(provincias.join(','))}`);
+    const data=await res.json();
+    data.forEach(r=>{
+      if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
+    });
+  }catch(e){}
+
+  // 3. Por provincia — para cupones de meses anteriores que aún estén
+  //    en la base (ej: pendientes viejos o pagados viejos no en /mes)
   for(const prov of provincias){
-    try{const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);const data=await res.json();data.forEach(r=>{if(!r.provincia)r.provincia=prov;});todos=todos.concat(data);}catch(e){}
+    try{
+      const res=await fetch(`/api/cupones?provincia=${encodeURIComponent(prov)}`);
+      const data=await res.json();
+      data.forEach(r=>{
+        if(!r.provincia)r.provincia=prov;
+        if(!vistos.has(r.id)){vistos.add(r.id);todos.push(r);}
+      });
+    }catch(e){}
   }
+
   return todos;
 }
-function ordenarPorProvYCuenta(arr){return arr.sort((a,b)=>{const pa=norm(a.provincia||''),pb=norm(b.provincia||'');if(pa!==pb)return pa<pb?-1:1;return(parseInt(a.cuenta)||0)-(parseInt(b.cuenta)||0);});}
+
+function ordenarPorProvYCuenta(arr){
+  return arr.sort((a,b)=>{
+    const pa=norm(a.provincia||''),pb=norm(b.provincia||'');
+    if(pa!==pb)return pa<pb?-1:1;
+    return(parseInt(a.cuenta)||0)-(parseInt(b.cuenta)||0);
+  });
+}
 
 // ════════════════════════════════════════════════════════
 // ── PENDIENTES DEL MES ────────────────────────────────
@@ -504,10 +550,8 @@ async function mostrarPendientesMes(){
   const lista=todos.filter(r=>{
     if(r.estado==='PAGADO')return false;
     if((r.cuotas_pendientes||0)>1)return false;
-    // Por fecha
     const fechas=extraerDiasMes(r.fecha_cobro||'');
     if(fechas.some(f=>f.mes===mesActual+1))return true;
-    // Por cta
     if(r.cta){const cta=norm(r.cta);if(cta===mesNum||cta===String(mesActual+1)||cta===norm(mesNombre)||cta===norm(mesNombre).substring(0,3))return true;}
     return false;
   });
@@ -542,30 +586,28 @@ async function descargarPendientesMesTxt(){
 
 // ════════════════════════════════════════════════════════
 // ── TRANSFERENCIAS 09/04 AL 14/04 ────────────────────
-// Reglas:
-//   1. Estado = PAGADO
-//   2. Medio pago = TRANSFERENCIA (excluye MERCADO PAGO)
-//   3. La fecha 09-14/04 aparece en COMENTARIO o en fecha_cobro
-//   4. Se muestran TODOS (con o sin banco reconocido)
-//   5. Comparación solo por DÍA/MES — ignora el año
+// Busca en COMENTARIO (campo principal) y en fecha_cobro.
+// Incluye TODOS los pagos con TRANSFERENCIA en ese rango,
+// con o sin banco reconocido.
 // ════════════════════════════════════════════════════════
 async function mostrarTransferenciasBancarias(){
-  const DESDE={dia:9,  mes:4};
-  const HASTA={dia:14, mes:4};
+  const DESDE={dia:9, mes:4};
+  const HASTA={dia:14,mes:4};
 
   const todos=await cargarTodosCupones();
 
   const lista=todos.filter(r=>{
-    // 1. Pagado
+    // 1. Solo PAGADO
     if(r.estado!=='PAGADO')return false;
-    // 2. Transferencia, no Mercado Pago
+    // 2. Método TRANSFERENCIA, excluir MERCADO PAGO
     const mp=norm(r.medio_pago||'');
     if(!mp.includes('TRANSFERENCIA'))return false;
     if(mp.includes('MERCADO')||mp.includes('MP'))return false;
-    // 3. Fecha en rango — buscar en comentario Y en fecha_cobro
-    const fechasComentario=extraerDiasMes(r.comentario||'');
-    const fechasCobro=extraerDiasMes(r.fecha_cobro||'');
-    const todasFechas=[...fechasComentario,...fechasCobro];
+    // 3. Fecha 09-14/04 en COMENTARIO o en fecha_cobro
+    const todasFechas=[
+      ...extraerDiasMes(r.comentario||''),
+      ...extraerDiasMes(r.fecha_cobro||'')
+    ];
     return todasFechas.some(f=>enRangoDiaMes(f,DESDE,HASTA));
   });
 
@@ -573,11 +615,13 @@ async function mostrarTransferenciasBancarias(){
     abrirModal(`
       <h2>🏦 Transferencias — 09/04 al 14/04</h2>
       <div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px">
-        <strong>No se encontraron transferencias.</strong><br><br>
-        El sistema busca registros con:<br>
-        ✔ Método = TRANSFERENCIA (no Mercado Pago)<br>
-        ✔ Fecha entre 09/04 y 14/04 en el campo <strong>comentario</strong> o <strong>fecha cobro</strong><br>
-        ✔ Formatos aceptados: <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code>
+        <strong>No se encontraron transferencias en ese rango.</strong><br><br>
+        El sistema busca en <u>todos los registros</u> (PAGOS HOY, PAGOS DEL MES y por provincia) registros con:<br><br>
+        ✔ Estado: <strong>PAGADO</strong><br>
+        ✔ Método: <strong>TRANSFERENCIA</strong> (no Mercado Pago)<br>
+        ✔ Fecha entre <strong>09/04 y 14/04</strong> en el campo <strong>COMENTARIO</strong> o en <strong>FECHA COBRO</strong><br><br>
+        Formatos de fecha aceptados en comentario:<br>
+        <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code> · <code>2025-04-09</code>
       </div>
       <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
     return;
@@ -587,18 +631,17 @@ async function mostrarTransferenciasBancarias(){
   const totalMonto=lista.reduce((s,r)=>s+(r.monto||0),0);
   const provs=new Set(lista.map(r=>r.provincia||'?')).size;
 
-  // Resumen por día (09 a 14)
+  // Resumen por día
   const porDia={};
   for(let d=9;d<=14;d++)porDia[d]={cant:0,monto:0};
   lista.forEach(r=>{
-    const todasFechas=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-    const enAbril=todasFechas.filter(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
-    if(enAbril.length>0){const dia=enAbril[0].dia;if(porDia[dia]){porDia[dia].cant++;porDia[dia].monto+=(r.monto||0);}}
+    const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
+    const enAbril=tf.filter(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
+    if(enAbril.length){const dia=enAbril[0].dia;if(porDia[dia]){porDia[dia].cant++;porDia[dia].monto+=(r.monto||0);}}
   });
-
   const DIAS_LABELS={9:'Mié 9',10:'Jue 10',11:'Vie 11',12:'Sáb 12',13:'Dom 13',14:'Lun 14'};
   const diaCards=Object.entries(porDia).filter(([,v])=>v.cant>0).map(([dia,v])=>
-    `<div class="dia-card"><div class="dc-dia">${DIAS_LABELS[dia]}</div><div class="dc-monto">$${v.monto.toLocaleString('es-AR')}</div><div class="dc-cant">${v.cant} pago/s</div></div>`
+    `<div class="dia-card"><div class="dc-dia">${DIAS_LABELS[dia]||dia+'/04'}</div><div class="dc-monto">$${v.monto.toLocaleString('es-AR')}</div><div class="dc-cant">${v.cant} pago/s</div></div>`
   ).join('');
 
   // Tabla agrupada por provincia
@@ -610,9 +653,8 @@ async function mostrarTransferenciasBancarias(){
     items.forEach(r=>{
       const b=detectarBanco(r.comentario);
       const bancoBadge=b?`<span class="badge-banco" style="background:${b.color}">${b.nombre}</span>`:`<span style="font-size:11px;color:var(--muted)">—</span>`;
-      // Detectar qué fecha del rango tiene
-      const todasFechas=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
-      const enAbril=todasFechas.find(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
+      const tf=[...extraerDiasMes(r.comentario||''),...extraerDiasMes(r.fecha_cobro||'')];
+      const enAbril=tf.find(f=>f.mes===4&&f.dia>=9&&f.dia<=14);
       const fechaStr=enAbril?`${String(enAbril.dia).padStart(2,'0')}/04`:(r.fecha_cobro||'');
       tablaHTML+=`<tr>
         <td style="font-size:11px;color:#888">N°${r.cuenta||'S/D'}</td>
@@ -622,7 +664,7 @@ async function mostrarTransferenciasBancarias(){
         <td style="font-size:11px;font-weight:600;color:#1a6b8a">${fechaStr}</td>
         <td><strong style="color:#1a6b8a">$${(r.monto||0).toLocaleString('es-AR')}</strong></td>
       </tr>
-      <tr><td colspan="6" style="font-size:11px;color:#666;padding:2px 10px 8px;border-bottom:1px solid rgba(0,0,0,.06)">${r.comentario||''}</td></tr>`;
+      <tr><td colspan="6" class="comentario-cell" style="max-width:none;padding:2px 10px 8px;border-bottom:1px solid rgba(0,0,0,.06);white-space:normal">${r.comentario||''}</td></tr>`;
     });
   });
 
@@ -638,6 +680,9 @@ async function mostrarTransferenciasBancarias(){
       <thead><tr><th>N° AFIL.</th><th>NOMBRE</th><th>PROV.</th><th>BANCO</th><th>FECHA</th><th>MONTO</th></tr></thead>
       <tbody>${tablaHTML}</tbody>
     </table>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px">
+      💡 La fecha y el banco se detectan del campo <strong>COMENTARIO</strong>. Formatos válidos: <code>09/04</code> · <code>09.04</code> · <code>09-04</code> · <code>09/04/2025</code>
+    </div>
     <div class="modal-footer">
       <button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button>
       <button class="btn-modal" style="background:#1a6b8a;color:white" onclick="descargarTransferenciasTxt()">💾 Guardar .txt</button>
