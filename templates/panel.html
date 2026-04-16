@@ -230,7 +230,7 @@ input:checked+.slider::before{transform:translateX(20px)}
 
 <script>
 const MESES_ES=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
-const DIAS_LABELS={9:'Mar 9/04',10:'Mié 10/04',11:'Jue 11/04',12:'Vie 12/04',13:'Sáb 13/04',14:'Dom 14/04',15:'Lun 15/04'};
+const DIAS_LABELS={9:'9/04',10:'10/04',11:'11/04',12:'12/04',13:'13/04',14:'14/04',15:'15/04'};
 const BANCOS_CONFIG=[
   {nombre:'SANTANDER',keys:['SANTANDER'],color:'#c0392b'},
   {nombre:'FRANCÉS',  keys:['FRANCES','FRANCÉS'],color:'#1a5276'},
@@ -238,6 +238,18 @@ const BANCOS_CONFIG=[
   {nombre:'MACRO',    keys:['MACRO'],color:'#e65100'},
   {nombre:'GALICIA',  keys:['GALICIA'],color:'#117a65'},
 ];
+
+// Todas las cadenas que identifican cada día 9-15 de abril
+// Se buscan como substring simple dentro del comentario (sin regex)
+const CADENAS_FECHA = {
+  9:  ['9/04','9.04','9-04','09/04','09.04','09-04','9/4','09/4'],
+  10: ['10/04','10.04','10-04','10/4'],
+  11: ['11/04','11.04','11-04','11/4'],
+  12: ['12/04','12.04','12-04','12/4'],
+  13: ['13/04','13.04','13-04','13/4'],
+  14: ['14/04','14.04','14-04','14/4'],
+  15: ['15/04','15.04','15-04','15/4'],
+};
 
 let usuario='',provincias=[],tabActual='',cupones={},currId=null;
 
@@ -436,7 +448,11 @@ async function cerrarCaja(){if(!confirm('¿Confirmar cierre de caja?'))return;co
 // ════════════════════════════════════════════════════════
 // ── HELPERS ───────────────────────────────────────────
 // ════════════════════════════════════════════════════════
-function norm(s){return(s||'').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();}
+
+function norm(s){
+  return (s||'').toString().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+}
 
 function detectarBanco(comentario){
   const t=norm(comentario);
@@ -444,51 +460,30 @@ function detectarBanco(comentario){
   return null;
 }
 
-// ──────────────────────────────────────────────────────
-// esMercadoPago: devuelve true si el comentario O el
-// medio_pago indica Mercado Pago / MP
-//
-// Reglas SIMPLES (sin regex complejos):
-//   - Si el comentario contiene "MERCADO" → es MP
-//   - Si el comentario contiene "MP"       → es MP
-//     (cualquier aparición de MP, aunque sea parte de
-//      otra palabra — así garantizamos que no se cuele)
-//   - Si el medio_pago contiene "MERCADO"  → es MP
-// ──────────────────────────────────────────────────────
+// ── esMercadoPago ────────────────────────────────────
+// Devuelve true si el comentario contiene "MP" o "MERCADO"
+// O si el campo medio_pago contiene "MERCADO"
 function esMercadoPago(r){
-  const medioPago = norm(r.medio_pago || '');
-  const comentario= norm(r.comentario  || '');
-  if(medioPago.includes('MERCADO')) return true;
-  if(comentario.includes('MERCADO')) return true;
-  if(comentario.includes('MP'))     return true;
+  const com = norm(r.comentario||'');
+  const med = norm(r.medio_pago||'');
+  if(med.includes('MERCADO')) return true;
+  if(com.includes('MERCADO')) return true;
+  if(com.includes('MP'))      return true;
   return false;
 }
 
-// ──────────────────────────────────────────────────────
-// fechaEnComentario: busca si el comentario menciona
-// algún día entre 9 y 15 del mes 04.
-//
-// Formatos aceptados (MUY PERMISIVOS):
-//   "09/04"  "9/04"  "09.04"  "9.04"  "09-04"  "9-04"
-//   "09/04/2025"  "9/4/25"  etc.
-//   También: "15/04" "15.04" etc.
-//
-// Estrategia: buscar la cadena "/04" o ".04" o "-04"
-// precedida por 1-2 dígitos que den 9-15.
-// ──────────────────────────────────────────────────────
-function fechaEnComentario(comentario){
+// ── detectarDiaAbril ─────────────────────────────────
+// Busca en el comentario si aparece alguna de las cadenas
+// de fecha de los días 9-15/04.
+// Usa búsqueda de SUBSTRING simple (indexOf), sin regex.
+// Devuelve el número de día (9-15) o null.
+function detectarDiaAbril(comentario){
   if(!comentario) return null;
-  const s = comentario.toString();
-
-  // Buscar patrón: (1 o 2 dígitos) + separador + "04"
-  // El separador puede ser / . -
-  // Aceptamos también "4" sin el cero como mes
-  const patron = /\b(0?[9]|1[0-5])\s*[\/\.\-]\s*(0?4)\b/g;
-  let m;
-  while((m = patron.exec(s)) !== null){
-    const dia = parseInt(m[1]);
-    const mes = parseInt(m[2]);
-    if(mes === 4 && dia >= 9 && dia <= 15) return dia;
+  const texto = comentario.toString(); // NO normalizar, conservar / y .
+  for(const [dia, cadenas] of Object.entries(CADENAS_FECHA)){
+    for(const cadena of cadenas){
+      if(texto.indexOf(cadena) !== -1) return parseInt(dia);
+    }
   }
   return null;
 }
@@ -517,51 +512,52 @@ function ordenarPorProvYCuenta(arr){
 // ════════════════════════════════════════════════════════
 // ── 💳 TRANSFERENCIAS PAGADAS 09-15/04 ───────────────
 //
-// REGLAS:
+// REGLAS (simples y claras):
 //   1. Estado = PAGADO
-//   2. Método = TRANSFERENCIA (cualquier transferencia)
-//   3. NO Mercado Pago: excluir si medio_pago o
-//      comentario contiene "MERCADO" o "MP"
-//   4. Fecha 09-15/04 encontrada en el COMENTARIO
-//      (fecha_cobro ignorada)
+//   2. medio_pago contiene "TRANSFERENCIA"
+//   3. El comentario NO contiene "MP" ni "MERCADO"
+//   4. El comentario contiene alguna cadena de fecha
+//      del 9/04 al 15/04 (búsqueda por substring)
 // ════════════════════════════════════════════════════════
 async function mostrarTransferenciasPagadas(){
   const todos = await cargarTodosCupones();
   const lista = [];
-  const excluidos = []; // para debug si hace falta
 
-  todos.forEach(r => {
+  todos.forEach(r=>{
     // 1. Pagado
     if(r.estado !== 'PAGADO') return;
 
-    // 2. Transferencia (campo medio_pago)
+    // 2. Es transferencia
     if(!norm(r.medio_pago||'').includes('TRANSFERENCIA')) return;
 
-    // 3. Excluir Mercado Pago
-    if(esMercadoPago(r)){ excluidos.push(r); return; }
+    // 3. No es Mercado Pago (revisa medio_pago y comentario)
+    if(esMercadoPago(r)) return;
 
-    // 4. Fecha en comentario
-    const dia = fechaEnComentario(r.comentario);
+    // 4. Fecha 9-15/04 en el comentario (búsqueda de texto simple)
+    const dia = detectarDiaAbril(r.comentario);
     if(dia === null) return;
 
     r._diaDetectado = dia;
     lista.push(r);
   });
 
+  // Totales para diagnóstico
+  const totalTransf = todos.filter(r=>r.estado==='PAGADO'&&norm(r.medio_pago||'').includes('TRANSFERENCIA')).length;
+  const sinMP       = todos.filter(r=>r.estado==='PAGADO'&&norm(r.medio_pago||'').includes('TRANSFERENCIA')&&!esMercadoPago(r)).length;
+
   if(!lista.length){
-    // Mostrar información de diagnóstico
-    const totalTransf = todos.filter(r=>r.estado==='PAGADO'&&norm(r.medio_pago||'').includes('TRANSFERENCIA')).length;
-    const sinMP = todos.filter(r=>r.estado==='PAGADO'&&norm(r.medio_pago||'').includes('TRANSFERENCIA')&&!esMercadoPago(r)).length;
     abrirModal(`
       <h2>💳 Transferencias — 09/04 al 15/04</h2>
-      <div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;font-size:13px;margin-bottom:12px">
-        <strong>No se encontraron pagos en el rango.</strong><br><br>
+      <div style="background:#fef9e7;border:1px solid #f9ca24;border-radius:8px;padding:14px;font-size:13px">
+        <strong>No se encontraron pagos.</strong><br><br>
         <strong>Diagnóstico:</strong><br>
-        • Total transferencias PAGADAS en todas las provincias: <strong>${totalTransf}</strong><br>
-        • Sin Mercado Pago: <strong>${sinMP}</strong><br>
+        • Transferencias PAGADAS en total: <strong>${totalTransf}</strong><br>
+        • Sin MP/Mercado Pago: <strong>${sinMP}</strong><br>
         • Con fecha 09-15/04 en comentario: <strong>0</strong><br><br>
-        <strong>Verificá que los comentarios tengan la fecha así:</strong><br>
-        <code>09/04</code> · <code>9/04</code> · <code>09.04</code> · <code>9.04</code> · <code>09-04</code>
+        Si hay ${sinMP} transferencias sin MP pero no aparece ninguna,<br>
+        el problema es que los comentarios no tienen la fecha en formato<br>
+        reconocible. Los formatos válidos son:<br>
+        <code>9/04</code> &nbsp; <code>09/04</code> &nbsp; <code>9.04</code> &nbsp; <code>09.04</code> &nbsp; <code>9-04</code> &nbsp; <code>09-04</code>
       </div>
       <div class="modal-footer"><button class="btn-modal btn-modal-cancel" onclick="cerrarModal()">Cerrar</button></div>`);
     return;
@@ -638,25 +634,24 @@ async function descargarTransferenciasTxt(){
     if(r.estado!=='PAGADO')return;
     if(!norm(r.medio_pago||'').includes('TRANSFERENCIA'))return;
     if(esMercadoPago(r))return;
-    const dia=fechaEnComentario(r.comentario);
+    const dia=detectarDiaAbril(r.comentario);
     if(dia===null)return;
     r._diaDetectado=dia;lista.push(r);
   });
   ordenarPorProvYCuenta(lista);
   const grupos={};lista.forEach(r=>{const pv=r.provincia||'SIN PROVINCIA';if(!grupos[pv])grupos[pv]=[];grupos[pv].push(r);});
   const tot=lista.reduce((s,r)=>s+(r.monto||0),0);
-  let txt=`DENTAL WHITE — TRANSFERENCIAS PAGADAS 09/04 AL 15/04\n${'='.repeat(65)}\nTotas las provincias | Sin Mercado Pago | Fecha en comentario\nTotal: ${lista.length} pagos | $${tot.toLocaleString('es-AR')}\n`;
+  let txt=`DENTAL WHITE — TRANSFERENCIAS 09/04 AL 15/04\n${'='.repeat(65)}\nSin Mercado Pago | Total: ${lista.length} pagos | $${tot.toLocaleString('es-AR')}\n`;
   const pd={};for(let d=9;d<=15;d++)pd[d]={cant:0,monto:0};
   lista.forEach(r=>{if(pd[r._diaDetectado]){pd[r._diaDetectado].cant++;pd[r._diaDetectado].monto+=(r.monto||0);}});
   txt+=`\nRESUMEN POR DIA:\n`;
-  Object.entries(pd).forEach(([dia,v])=>{if(v.cant>0)txt+=`  ${DIAS_LABELS[dia]}: ${v.cant} pago/s — $${v.monto.toLocaleString('es-AR')}\n`;});
+  for(let d=9;d<=15;d++){if(pd[d].cant>0)txt+=`  ${DIAS_LABELS[d]}: ${pd[d].cant} pago/s — $${pd[d].monto.toLocaleString('es-AR')}\n`;}
   Object.entries(grupos).forEach(([pv,items])=>{
     const sub=items.reduce((s,r)=>s+(r.monto||0),0);
     txt+=`\n${'─'.repeat(65)}\n${pv.toUpperCase()} — ${items.length} pago/s — $${sub.toLocaleString('es-AR')}\n${'─'.repeat(65)}\n`;
     items.forEach((r,i)=>{
       const b=detectarBanco(r.comentario);const bn=b?b.nombre:'';
-      const fd=`${String(r._diaDetectado).padStart(2,'0')}/04`;
-      txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').toString().padEnd(8)} ${(r.nombre||'').padEnd(28)} ${fd.padEnd(8)} ${bn.padEnd(12)} $${(r.monto||0).toLocaleString('es-AR')}\n`;
+      txt+=`${String(i+1).padStart(3,'0')}. N°${(r.cuenta||'').toString().padEnd(8)} ${(r.nombre||'').padEnd(28)} ${String(r._diaDetectado).padStart(2,'0')}/04  ${bn.padEnd(12)} $${(r.monto||0).toLocaleString('es-AR')}\n`;
       if(r.comentario)txt+=`     > ${r.comentario}\n`;
     });
   });
@@ -722,7 +717,7 @@ async function mostrarDeudores3(){
 async function descargarDeudores3Txt(){
   const res=await fetch(`/api/deudores?provincias=${encodeURIComponent(provincias.join(','))}`);const todos=await res.json();const data=todos.filter(c=>c.cupones.length>=3);
   const tot=data.reduce((s,c)=>s+(c.total||0),0);const hoy=new Date().toLocaleDateString('es-AR');
-  let txt=`DENTAL WHITE — 3+ CUOTAS PENDIENTES\n${hoy}\n${'='.repeat(55)}\nTotal: ${data.length} clientes | $${tot.toLocaleString('es-AR')}\n\n`;
+  let txt=`DENTAL WHITE — 3+ CUOTAS PENDIENTES\n${hoy}\n${'='.repeat(55)}\nTotal: ${data.length} | $${tot.toLocaleString('es-AR')}\n\n`;
   data.forEach(c=>{txt+=`N° ${c.cuenta||'S/D'} — ${c.nombre} (${c.provincia})\n  Cuotas: ${c.cupones.length}\n`;c.cupones.forEach(d=>{txt+=`    · Cuota ${d.cta} ${d.mes} — $${(d.monto||0).toLocaleString('es-AR')}\n`;});txt+=`  TOTAL: $${(c.total||0).toLocaleString('es-AR')}\n${'─'.repeat(55)}\n`;});
   const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`deudores_criticos_${hoy.replace(/\//g,'-')}.txt`;a.click();URL.revokeObjectURL(url);
 }
